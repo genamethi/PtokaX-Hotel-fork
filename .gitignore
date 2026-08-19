@@ -1,0 +1,10 @@
+# Build system output
+/config.mk
+/config.log
+/build/
+/PtokaX
+
+# Object and dependency files
+*.o
+*.d
+*.a

@@ -1,0 +1,980 @@
+#!/bin/sh
+#
+# configure - dependency detection for PtokaX.
+#
+# Writes config.mk, which the Makefile includes. Portable POSIX sh; no autotools.
+# Every probe is logged to config.log.
+#
+# Usage: ./configure [OPTION]...   (see --help)
+#
+
+set -e
+
+PACKAGE_NAME="PtokaX"
+PACKAGE_VERSION="0.5.3.0"
+
+srcdir=$(dirname "$0")
+case $srcdir in
+    /*) ;;
+    *)  srcdir=$(cd "$srcdir" && pwd) ;;
+esac
+
+CONFIG_MK=config.mk
+CONFIG_LOG=config.log
+
+#------------------------------------------------------------------------------
+# Defaults
+#------------------------------------------------------------------------------
+prefix=/usr/local
+exec_prefix=
+bindir=
+datarootdir=
+datadir=
+docdir=
+mandir=
+
+with_database=none
+with_lua=auto
+with_lua_cflags=
+with_lua_libs=
+with_system_tinyxml=no
+with_skein=yes
+enable_debug=no
+
+build_alias=
+host_alias=
+
+# Environment-overridable tools/flags.
+CC=${CC:-}
+CXX=${CXX:-}
+CFLAGS=${CFLAGS:-}
+CXXFLAGS=${CXXFLAGS:-}
+CPPFLAGS=${CPPFLAGS:-}
+LDFLAGS=${LDFLAGS:-}
+LIBS=${LIBS:-}
+AR=${AR:-ar}
+PKG_CONFIG=${PKG_CONFIG:-pkg-config}
+INSTALL=${INSTALL:-}
+
+# Remember the exact invocation so `make config` can replay it.
+configure_args=
+for arg in "$@"; do
+    configure_args="$configure_args '$arg'"
+done
+
+#------------------------------------------------------------------------------
+# Output helpers
+#------------------------------------------------------------------------------
+msg()      { printf '%s\n' "$*"; }
+checking() { printf 'checking %s... ' "$*"; }
+result()   { printf '%s\n' "$*"; }
+
+warn() {
+    printf '\n'
+    printf 'configure: WARNING: %s\n' "$@"
+    printf '\n'
+} >&2
+
+die() {
+    printf '\n'
+    printf 'configure: error: %s\n' "$@"
+    printf '\nSee %s for details.\n' "$CONFIG_LOG"
+    printf '\n'
+    exit 1
+} >&2
+
+usage() {
+    cat <<USAGE
+\`configure' prepares $PACKAGE_NAME $PACKAGE_VERSION for building on this system.
+
+Usage: ./configure [OPTION]...
+
+Installation directories:
+  --prefix=DIR            install architecture-independent files in DIR
+                          [/usr/local]
+  --exec-prefix=DIR       install architecture-dependent files in DIR [PREFIX]
+  --bindir=DIR            user executables [EPREFIX/bin]
+  --datarootdir=DIR       read-only arch-independent data root [PREFIX/share]
+  --datadir=DIR           read-only architecture-independent data [DATAROOTDIR]
+  --docdir=DIR            documentation root [DATAROOTDIR/doc/ptokax]
+  --mandir=DIR            man documentation [DATAROOTDIR/man]
+
+Optional features:
+  --enable-debug          build with -O0 -g3 and no optimisation [no]
+  --with-skein            build the bundled Skein hash (required for hashed
+                          passwords) [yes]
+  --without-skein         build WITHOUT Skein -- see the warning it prints
+
+Optional packages:
+  --with-database=BACKEND one of: none, sqlite, postgres, mysql [none]
+                          NOTE: this changes the on-disk setting ID layout;
+                          it is not a drop-in swap for an existing
+                          cfg/Settings.pxt.
+  --with-lua=VERSION      Lua to build against: auto, 5.1, 5.2, 5.3, 5.4, or an
+                          explicit pkg-config module name [auto]
+  --with-lua-cflags=FLAGS bypass Lua detection, use these compile flags
+  --with-lua-libs=LIBS    bypass Lua detection, use these link flags
+  --with-system-tinyxml   link the system libtinyxml instead of the bundled
+                          copy. The bundled copy is the default because
+                          TIXML_USE_STL changes TiXmlNode's layout, and only
+                          the bundled build can guarantee both sides agree.
+
+Some influential environment variables:
+  CC          C compiler            CFLAGS    C compiler flags
+  CXX         C++ compiler          CXXFLAGS  C++ compiler flags
+  CPPFLAGS    preprocessor flags    LDFLAGS   linker flags
+  LIBS        extra libraries       AR        archiver
+  PKG_CONFIG  pkg-config program    INSTALL   install(1) program
+
+Report bugs to <PPK@PtokaX.org>.
+USAGE
+}
+
+#------------------------------------------------------------------------------
+# Argument parsing
+#------------------------------------------------------------------------------
+# POSIX parameter expansion, not expr: `expr` exits 1 on an empty match, which
+# would abort the script under `set -e` for e.g. `--prefix=`.
+optarg() { printf '%s' "${1#*=}"; }
+
+while [ $# -gt 0 ]; do
+    opt=$1
+    case $opt in
+        --help|-h) usage; exit 0 ;;
+
+        --prefix=*)       prefix=$(optarg "$opt") ;;
+        --exec-prefix=*)  exec_prefix=$(optarg "$opt") ;;
+        --bindir=*)       bindir=$(optarg "$opt") ;;
+        --datarootdir=*)  datarootdir=$(optarg "$opt") ;;
+        --datadir=*)      datadir=$(optarg "$opt") ;;
+        --docdir=*)       docdir=$(optarg "$opt") ;;
+        --mandir=*)       mandir=$(optarg "$opt") ;;
+
+        --with-database=*)      with_database=$(optarg "$opt") ;;
+        --with-lua=*)           with_lua=$(optarg "$opt") ;;
+        --with-lua-cflags=*)    with_lua_cflags=$(optarg "$opt") ;;
+        --with-lua-libs=*)      with_lua_libs=$(optarg "$opt") ;;
+
+        --with-system-tinyxml)      with_system_tinyxml=yes ;;
+        --with-system-tinyxml=*)    with_system_tinyxml=$(optarg "$opt") ;;
+        --without-system-tinyxml)   with_system_tinyxml=no ;;
+
+        --with-skein)     with_skein=yes ;;
+        --without-skein)  with_skein=no ;;
+
+        --enable-debug)   enable_debug=yes ;;
+        --disable-debug)  enable_debug=no ;;
+
+        --build=*) build_alias=$(optarg "$opt") ;;
+        --host=*)  host_alias=$(optarg "$opt") ;;
+
+        # Accepted and ignored, so distro packaging macros (rpm %configure,
+        # dh_auto_configure) do not abort on options we have no use for.
+        --target=*|--sbindir=*|--libdir=*|--libexecdir=*|--includedir=*) ;;
+        --oldincludedir=*|--sysconfdir=*|--sharedstatedir=*) ;;
+        --localstatedir=*|--runstatedir=*|--infodir=*|--localedir=*) ;;
+        --htmldir=*|--dvidir=*|--pdfdir=*|--psdir=*) ;;
+        --disable-dependency-tracking|--enable-dependency-tracking) ;;
+        --enable-silent-rules|--disable-silent-rules) ;;
+        --disable-option-checking) ;;
+        --enable-fast-install|--enable-fast-install=*) ;;
+        --disable-maintainer-mode|--enable-maintainer-mode) ;;
+
+        # Environment assignments passed as arguments: CXX=... etc.
+        *=*)
+            name=${opt%%=*}
+            value=${opt#*=}
+            case $name in
+                CC|CXX|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|LIBS|AR|PKG_CONFIG|INSTALL)
+                    eval "$name=\$value" ;;
+                *) msg "configure: warning: ignoring unrecognised variable $name" ;;
+            esac
+            ;;
+
+        *) die "unrecognised option: $opt" "Try \`./configure --help' for usage." ;;
+    esac
+    shift
+done
+
+: "${exec_prefix:=$prefix}"
+: "${bindir:=$exec_prefix/bin}"
+: "${datarootdir:=$prefix/share}"
+: "${datadir:=$datarootdir}"
+: "${docdir:=$datarootdir/doc/ptokax}"
+: "${mandir:=$datarootdir/man}"
+
+case $with_database in
+    none|no|sqlite|postgres|postgresql|mysql|mariadb) ;;
+    *) die "--with-database must be one of: none, sqlite, postgres, mysql" ;;
+esac
+[ "$with_database" = no ] && with_database=none
+[ "$with_database" = postgresql ] && with_database=postgres
+[ "$with_database" = mariadb ] && with_database=mysql
+
+case $with_system_tinyxml in
+    yes|no) ;;
+    *) die "--with-system-tinyxml must be yes or no" ;;
+esac
+
+#------------------------------------------------------------------------------
+# config.log and probe helpers
+#------------------------------------------------------------------------------
+: > "$CONFIG_LOG"
+{
+    echo "This file contains any messages produced by compilers while"
+    echo "running configure, to aid debugging if configure makes a mistake."
+    echo
+    echo "  $ $0$configure_args"
+    echo
+    echo "  uname -a: $(uname -a 2>/dev/null)"
+    echo
+} >> "$CONFIG_LOG"
+
+conftest_dir=
+cleanup() {
+    [ -n "$conftest_dir" ] && rm -rf "$conftest_dir"
+}
+trap cleanup EXIT HUP INT TERM
+conftest_dir=$(mktemp -d "${TMPDIR:-/tmp}/ptokax-conf.XXXXXX") \
+    || die "cannot create a temporary directory"
+
+# try_link <compiler> <ext> <flags...>   -- source on stdin.
+# Returns 0 if the program compiles AND links.
+try_link() {
+    _cc=$1; _ext=$2; shift 2
+    _src=$conftest_dir/conftest.$_ext
+    _out=$conftest_dir/conftest.bin
+    cat > "$_src"
+    {
+        echo "=============================================================="
+        echo "try_link: $_cc $* $_src -o $_out"
+        echo "--- source ---"
+        cat "$_src"
+        echo "--- output ---"
+    } >> "$CONFIG_LOG"
+    if $_cc "$_src" -o "$_out" "$@" >> "$CONFIG_LOG" 2>&1; then
+        echo "--- exit 0 (success) ---" >> "$CONFIG_LOG"
+        rm -f "$_out"
+        return 0
+    fi
+    echo "--- failed ---" >> "$CONFIG_LOG"
+    rm -f "$_out"
+    return 1
+}
+
+# try_compile <compiler> <ext> <flags...> -- source on stdin. Compile only.
+try_compile() {
+    _cc=$1; _ext=$2; shift 2
+    _src=$conftest_dir/conftest.$_ext
+    _obj=$conftest_dir/conftest.o
+    cat > "$_src"
+    {
+        echo "=============================================================="
+        echo "try_compile: $_cc $* -c $_src -o $_obj"
+        echo "--- source ---"
+        cat "$_src"
+        echo "--- output ---"
+    } >> "$CONFIG_LOG"
+    if $_cc -c "$_src" -o "$_obj" "$@" >> "$CONFIG_LOG" 2>&1; then
+        echo "--- exit 0 (success) ---" >> "$CONFIG_LOG"
+        rm -f "$_obj"
+        return 0
+    fi
+    echo "--- failed ---" >> "$CONFIG_LOG"
+    rm -f "$_obj"
+    return 1
+}
+
+have_prog() { command -v "$1" >/dev/null 2>&1; }
+
+have_pkg() {
+    have_prog "$PKG_CONFIG" || return 1
+    "$PKG_CONFIG" --exists "$1" >/dev/null 2>&1
+}
+
+#------------------------------------------------------------------------------
+# 1. Compilers
+#------------------------------------------------------------------------------
+msg ""
+msg "Configuring $PACKAGE_NAME $PACKAGE_VERSION"
+msg ""
+
+checking "for a C++ compiler"
+if [ -n "$CXX" ]; then
+    cxx_candidates=$CXX
+else
+    cxx_candidates="c++ g++ clang++"
+fi
+found_cxx=
+for c in $cxx_candidates; do
+    have_prog "$c" || continue
+    if try_link "$c" cpp <<'EOF'
+int main() { return 0; }
+EOF
+    then found_cxx=$c; break; fi
+done
+[ -n "$found_cxx" ] || { result "no"; die \
+    "no working C++ compiler found (tried: $cxx_candidates)" \
+    "Install g++ or clang++, or set CXX=."; }
+CXX=$found_cxx
+result "$CXX"
+
+checking "for a C compiler"
+if [ -n "$CC" ]; then
+    cc_candidates=$CC
+else
+    cc_candidates="cc gcc clang"
+fi
+found_cc=
+for c in $cc_candidates; do
+    have_prog "$c" || continue
+    if try_link "$c" c <<'EOF'
+int main(void) { return 0; }
+EOF
+    then found_cc=$c; break; fi
+done
+[ -n "$found_cc" ] || { result "no"; die \
+    "no working C compiler found (tried: $cc_candidates)" \
+    "Install gcc or clang, or set CC=."; }
+CC=$found_cc
+result "$CC"
+
+# install(1): prefer a BSD/GNU-compatible one.
+if [ -z "$INSTALL" ]; then
+    if have_prog ginstall; then INSTALL=ginstall
+    elif have_prog install; then INSTALL=install
+    else die "no install(1) program found; set INSTALL= to one."; fi
+fi
+
+#------------------------------------------------------------------------------
+# 2. Platform
+#------------------------------------------------------------------------------
+checking "host system type"
+host_os=$(uname -s 2>/dev/null || echo unknown)
+result "$host_os"
+
+if [ -n "$host_alias" ] && [ -n "$build_alias" ] && \
+   [ "$host_alias" != "$build_alias" ]; then
+    warn "cross-compiling (--host=$host_alias) is untested for $PACKAGE_NAME." \
+         "All probes below run compiled test programs on the build machine."
+fi
+
+# Extra search roots, mirroring what the old per-OS makefile targets hardcoded.
+sys_prefixes="/usr"
+case $host_os in
+    FreeBSD|OpenBSD|Darwin)  sys_prefixes="/usr /usr/local" ;;
+    NetBSD)                  sys_prefixes="/usr /usr/pkg /usr/local" ;;
+    Haiku)                   sys_prefixes="/usr /boot/system /boot/system/develop" ;;
+esac
+
+EXTRA_CPPFLAGS=
+EXTRA_LDFLAGS=
+for p in $sys_prefixes; do
+    [ "$p" = /usr ] && continue
+    [ -d "$p/include" ] && EXTRA_CPPFLAGS="$EXTRA_CPPFLAGS -I$p/include"
+    [ -d "$p/lib" ]     && EXTRA_LDFLAGS="$EXTRA_LDFLAGS -L$p/lib"
+done
+
+#------------------------------------------------------------------------------
+# 3. pthreads
+#------------------------------------------------------------------------------
+PTHREAD_CFLAGS=
+PTHREAD_LIBS=
+if [ "$host_os" = Haiku ]; then
+    checking "for pthreads"
+    result "not needed on Haiku"
+else
+    checking "for pthreads"
+    pthread_src='
+#include <pthread.h>
+static void* worker(void* a) { return a; }
+int main(void) {
+    pthread_t t;
+    if (pthread_create(&t, 0, worker, 0) != 0) return 1;
+    pthread_join(t, 0);
+    return 0;
+}'
+    if printf '%s\n' "$pthread_src" | try_link "$CC" c $EXTRA_LDFLAGS -pthread; then
+        PTHREAD_CFLAGS=-pthread
+        PTHREAD_LIBS=-pthread
+        result "-pthread"
+    elif printf '%s\n' "$pthread_src" | try_link "$CC" c $EXTRA_LDFLAGS -lpthread; then
+        PTHREAD_LIBS=-lpthread
+        result "-lpthread"
+    else
+        result "no"
+        die "no usable pthreads implementation found." \
+            "$PACKAGE_NAME is multi-threaded and cannot be built without it."
+    fi
+fi
+
+#------------------------------------------------------------------------------
+# 4. libdl
+#------------------------------------------------------------------------------
+checking "for dlopen"
+dl_src='
+#include <dlfcn.h>
+int main(void) { void* h = dlopen("libc.so.6", RTLD_LAZY); if (h) dlclose(h); return 0; }'
+DL_LIBS=
+if printf '%s\n' "$dl_src" | try_link "$CC" c $EXTRA_LDFLAGS; then
+    result "none required"
+elif printf '%s\n' "$dl_src" | try_link "$CC" c $EXTRA_LDFLAGS -ldl; then
+    DL_LIBS=-ldl
+    result "-ldl"
+else
+    result "not found"
+    warn "dlopen() was not found; Lua's package.loadlib will not work." \
+         "Continuing, since the hub itself does not require it."
+fi
+
+#------------------------------------------------------------------------------
+# 5. Sockets
+#------------------------------------------------------------------------------
+checking "for socket libraries"
+sock_src='
+#include <sys/types.h>
+#include <sys/socket.h>
+int main(void) { return socket(AF_INET, SOCK_STREAM, 0) < 0; }'
+SOCKET_LIBS=
+if printf '%s\n' "$sock_src" | try_link "$CC" c $EXTRA_LDFLAGS; then
+    result "none required"
+elif printf '%s\n' "$sock_src" | try_link "$CC" c $EXTRA_LDFLAGS -lsocket -lnsl; then
+    SOCKET_LIBS="-lsocket -lnsl"
+    result "-lsocket -lnsl"
+elif printf '%s\n' "$sock_src" | try_link "$CC" c $EXTRA_LDFLAGS -lnetwork; then
+    SOCKET_LIBS=-lnetwork
+    result "-lnetwork"
+else
+    result "no"
+    die "cannot link a program that calls socket()."
+fi
+
+#------------------------------------------------------------------------------
+# 6. iconv   (core/TextConverter.cpp)
+#------------------------------------------------------------------------------
+checking "for iconv"
+iconv_src='
+#include <iconv.h>
+int main(void) {
+    iconv_t c = iconv_open("utf-8", "utf-8");
+    if (c == (iconv_t)-1) return 1;
+    iconv_close(c);
+    return 0;
+}'
+ICONV_LIBS=
+if printf '%s\n' "$iconv_src" | try_link "$CC" c $EXTRA_CPPFLAGS $EXTRA_LDFLAGS; then
+    result "in libc"
+elif printf '%s\n' "$iconv_src" | try_link "$CC" c $EXTRA_CPPFLAGS $EXTRA_LDFLAGS -liconv; then
+    ICONV_LIBS=-liconv
+    result "-liconv"
+else
+    result "no"
+    die "iconv not found." \
+        "Install a libiconv development package (GNU libiconv on the BSDs and" \
+        "macOS; glibc already provides it on Linux)."
+fi
+
+#------------------------------------------------------------------------------
+# 7. zlib   (core/ZlibUtility.cpp)
+#------------------------------------------------------------------------------
+checking "for zlib"
+ZLIB_CFLAGS=
+ZLIB_LIBS=
+zlib_version=
+if have_pkg zlib; then
+    ZLIB_CFLAGS=$("$PKG_CONFIG" --cflags zlib)
+    ZLIB_LIBS=$("$PKG_CONFIG" --libs zlib)
+    zlib_version=$("$PKG_CONFIG" --modversion zlib)
+fi
+zlib_src='
+#include <zlib.h>
+int main(void) { return compressBound(1024) == 0; }'
+if [ -n "$ZLIB_LIBS" ] && \
+   printf '%s\n' "$zlib_src" | try_link "$CC" c $ZLIB_CFLAGS $EXTRA_LDFLAGS $ZLIB_LIBS; then
+    result "${zlib_version:-yes} (pkg-config)"
+elif printf '%s\n' "$zlib_src" | try_link "$CC" c $EXTRA_CPPFLAGS $EXTRA_LDFLAGS -lz; then
+    ZLIB_CFLAGS=
+    ZLIB_LIBS=-lz
+    zlib_version=
+    result "-lz"
+else
+    result "no"
+    die "zlib not found." \
+        "Install zlib1g-dev (Debian/Ubuntu), zlib-devel (Fedora/RHEL/SUSE)," \
+        "or zlib (Arch, BSD ports)."
+fi
+
+#------------------------------------------------------------------------------
+# 8. Lua
+#
+# The source carries no LUA_5_x build define; it branches on Lua's own
+# LUA_VERSION_NUM. Only the include dir and library name vary, which is exactly
+# what the old lua51/lua52/lua53/freebsd/openbsd/netbsd targets hardcoded.
+#------------------------------------------------------------------------------
+checking "for Lua"
+LUA_CFLAGS=
+LUA_LIBS=
+lua_how=
+lua_version=
+
+# Explicit versions come before a bare `lua` on purpose: on many systems the
+# unqualified lua.pc now points at 5.5, which this codebase predates.
+lua_pkgs_54="lua5.4 lua-5.4 lua54"
+lua_pkgs_53="lua5.3 lua-5.3 lua53"
+lua_pkgs_52="lua5.2 lua-5.2 lua52"
+lua_pkgs_51="lua5.1 lua-5.1 lua51"
+
+case $with_lua in
+    auto) lua_pkgs="$lua_pkgs_54 $lua_pkgs_53 $lua_pkgs_52 $lua_pkgs_51 lua" ;;
+    5.4)  lua_pkgs="$lua_pkgs_54" ;;
+    5.3)  lua_pkgs="$lua_pkgs_53" ;;
+    5.2)  lua_pkgs="$lua_pkgs_52" ;;
+    5.1)  lua_pkgs="$lua_pkgs_51" ;;
+    *)    lua_pkgs="$with_lua" ;;
+esac
+
+lua_src='
+extern "C" {
+#include <lua.h>
+#include <lualib.h>
+#include <lauxlib.h>
+}
+int main() {
+    lua_State* L = luaL_newstate();
+    if (L == 0) return 1;
+    luaL_openlibs(L);
+    lua_close(L);
+    return 0;
+}'
+
+if [ -n "$with_lua_cflags" ] || [ -n "$with_lua_libs" ]; then
+    LUA_CFLAGS=$with_lua_cflags
+    LUA_LIBS=$with_lua_libs
+    lua_how="user-specified"
+    printf '%s\n' "$lua_src" \
+        | try_link "$CXX" cpp $LUA_CFLAGS $EXTRA_LDFLAGS $LUA_LIBS \
+        || { result "no"; die \
+            "the Lua flags you supplied do not link:" \
+            "  --with-lua-cflags=$with_lua_cflags" \
+            "  --with-lua-libs=$with_lua_libs"; }
+    result "$lua_how"
+else
+    # Pass 1: pkg-config.
+    for p in $lua_pkgs; do
+        have_pkg "$p" || continue
+        _cflags=$("$PKG_CONFIG" --cflags "$p")
+        _libs=$("$PKG_CONFIG" --libs "$p")
+        if printf '%s\n' "$lua_src" \
+             | try_link "$CXX" cpp $_cflags $EXTRA_LDFLAGS $_libs; then
+            LUA_CFLAGS=$_cflags
+            LUA_LIBS=$_libs
+            lua_version=$("$PKG_CONFIG" --modversion "$p")
+            lua_how="pkg-config $p"
+            break
+        fi
+    done
+
+    # Pass 2: brute-force include dir x library name, the old hardcoded paths.
+    if [ -z "$LUA_LIBS" ]; then
+        case $with_lua in
+            auto) lua_vers="5.4 5.3 5.2 5.1" ;;
+            5.4|5.3|5.2|5.1) lua_vers=$with_lua ;;
+            *)    lua_vers="5.4 5.3 5.2 5.1" ;;
+        esac
+        for p in $sys_prefixes; do
+            [ -n "$LUA_LIBS" ] && break
+            for v in $lua_vers; do
+                [ -n "$LUA_LIBS" ] && break
+                vc=$(echo "$v" | tr -d .)
+                for inc in "$p/include/lua$v" "$p/include/lua-$v" \
+                           "$p/include/lua$vc" "$p/include/lua/$v" \
+                           "$p/include"; do
+                    [ -d "$inc" ] || continue
+                    [ -f "$inc/lua.h" ] || continue
+                    for l in "lua$v" "lua-$v" "lua$vc" lua; do
+                        if printf '%s\n' "$lua_src" \
+                             | try_link "$CXX" cpp "-I$inc" $EXTRA_LDFLAGS \
+                                        "-L$p/lib" "-l$l" -lm; then
+                            LUA_CFLAGS="-I$inc"
+                            LUA_LIBS="-L$p/lib -l$l -lm"
+                            lua_version=$v
+                            lua_how="found in $inc"
+                            break
+                        fi
+                    done
+                    [ -n "$LUA_LIBS" ] && break
+                done
+            done
+        done
+    fi
+
+    [ -n "$LUA_LIBS" ] || { result "no"; die \
+        "Lua not found (tried pkg-config: $lua_pkgs)." \
+        "Install liblua5.4-dev / lua-devel / lua, or point configure at it:" \
+        "  ./configure --with-lua-cflags=-I/path/include --with-lua-libs='-L/path/lib -llua'"; }
+
+    result "${lua_version:-unknown} ($lua_how)"
+fi
+
+# Warn about Lua the source predates. Read LUA_VERSION_NUM from the real header
+# rather than trusting the package name.
+lua_num=
+cat > "$conftest_dir/luaver.cpp" <<'LUAVER'
+extern "C" {
+#include <lua.h>
+}
+#include <cstdio>
+int main() { printf("%d\n", LUA_VERSION_NUM); return 0; }
+LUAVER
+if $CXX "$conftest_dir/luaver.cpp" -o "$conftest_dir/luaver" \
+     $LUA_CFLAGS $EXTRA_LDFLAGS $LUA_LIBS >> "$CONFIG_LOG" 2>&1; then
+    lua_num=$("$conftest_dir/luaver" 2>/dev/null || true)
+fi
+rm -f "$conftest_dir/luaver" "$conftest_dir/luaver.cpp"
+
+# Trust the header, not the package name: the pass-2 fallback can match a
+# generic -llua that turns out to be a different release entirely.
+if [ -n "$lua_num" ]; then
+    lua_major=$((lua_num / 100))
+    lua_minor=$((lua_num % 100))
+    lua_version="$lua_major.$lua_minor"
+fi
+
+case $with_lua in
+    5.1|5.2|5.3|5.4)
+        want_num=$(echo "$with_lua" | awk -F. '{ printf "%d", $1 * 100 + $2 }')
+        if [ -z "$lua_num" ]; then
+            die "--with-lua=$with_lua was given, but the resolved Lua headers" \
+                "could not be compiled to read LUA_VERSION_NUM."
+        fi
+        if [ "$lua_num" -ne "$want_num" ]; then
+            die "--with-lua=$with_lua was requested, but the Lua that was found is" \
+                "actually $lua_version (LUA_VERSION_NUM=$lua_num)." \
+                "" \
+                "Resolved to:  $LUA_CFLAGS $LUA_LIBS" \
+                "" \
+                "Install the Lua $with_lua development package, or point configure" \
+                "straight at it with --with-lua-cflags= and --with-lua-libs=."
+        fi
+        ;;
+esac
+
+if [ -n "$lua_num" ] && [ "$lua_num" -gt 504 ]; then
+    warn "building against Lua $lua_version (newer than 5.4)." \
+         "$PACKAGE_NAME 0.5.3.0 predates it and its LUA_VERSION_NUM branches were" \
+         "never written against this release. The build may fail or scripts may" \
+         "misbehave. Pin a tested version with --with-lua=5.4 if that happens."
+fi
+
+#------------------------------------------------------------------------------
+# 9. tinyxml
+#
+# TIXML_USE_STL flips TIXML_STRING between std::string and TiXmlString, and that
+# type is a *member* of TiXmlNode -- so it changes class layout. Both the library
+# and every TU that includes <tinyxml.h> must agree. The bundled build guarantees
+# that; a system library has to be probed for.
+#------------------------------------------------------------------------------
+checking "for tinyxml"
+TINYXML_BUNDLED=
+TINYXML_CPPFLAGS=
+TINYXML_LIBS=
+
+tinyxml_stl_src='
+#include <tinyxml.h>
+#include <string>
+int main() {
+    TiXmlText t(std::string("x"));
+    t.SetValue(std::string("y"));
+    TiXmlDocument d;
+    return d.SaveFile(std::string("/dev/null")) ? 0 : 1;
+}'
+tinyxml_nostl_src='
+#include <tinyxml.h>
+int main() {
+    TiXmlText t("x");
+    t.SetValue("y");
+    TiXmlDocument d;
+    return d.SaveFile("/dev/null") ? 0 : 1;
+}'
+
+if [ "$with_system_tinyxml" = yes ]; then
+    if printf '%s\n' "$tinyxml_stl_src" \
+         | try_link "$CXX" cpp -DTIXML_USE_STL $EXTRA_CPPFLAGS $EXTRA_LDFLAGS -ltinyxml; then
+        TINYXML_CPPFLAGS="-DTIXML_USE_STL"
+        TINYXML_LIBS="-ltinyxml"
+        result "system, built with STL"
+    elif printf '%s\n' "$tinyxml_nostl_src" \
+         | try_link "$CXX" cpp $EXTRA_CPPFLAGS $EXTRA_LDFLAGS -ltinyxml; then
+        TINYXML_CPPFLAGS=""
+        TINYXML_LIBS="-ltinyxml"
+        result "system, built without STL"
+        warn "the system libtinyxml was built WITHOUT TIXML_USE_STL." \
+             "This is supported, but the bundled copy (the default) is preferred:" \
+             "TinyXML 1 has been unmaintained since 2011."
+    else
+        result "no"
+        die "--with-system-tinyxml was given, but no usable system libtinyxml" \
+            "was found (neither the STL nor the non-STL layout links)." \
+            "Drop --with-system-tinyxml to build the bundled copy in tinyxml/."
+    fi
+else
+    [ -f "$srcdir/tinyxml/tinyxml.cpp" ] || die \
+        "the bundled tinyxml sources are missing from $srcdir/tinyxml/."
+    TINYXML_BUNDLED=yes
+    TINYXML_CPPFLAGS="-I\$(srcdir)/tinyxml -DTIXML_USE_STL"
+    TINYXML_LIBS=
+    result "bundled (TIXML_USE_STL)"
+fi
+
+#------------------------------------------------------------------------------
+# 10. Database backend
+#------------------------------------------------------------------------------
+checking "for database backend"
+DB_CFLAGS=
+DB_LIBS=
+DB_SRC=
+DB_DEFINE=
+
+db_try() {   # db_try <cflags> <libs> <source-on-stdin marker>
+    printf '%s\n' "$1" | try_link "$CXX" cpp $2 $EXTRA_CPPFLAGS $EXTRA_LDFLAGS $3
+}
+
+case $with_database in
+none)
+    result "none"
+    ;;
+
+sqlite)
+    sqlite_src='
+#include <sqlite3.h>
+int main() { sqlite3* db = 0; sqlite3_open(":memory:", &db); sqlite3_close(db); return 0; }'
+    if have_pkg sqlite3; then
+        _c=$("$PKG_CONFIG" --cflags sqlite3); _l=$("$PKG_CONFIG" --libs sqlite3)
+        if db_try "$sqlite_src" "$_c" "$_l"; then
+            DB_CFLAGS=$_c; DB_LIBS=$_l
+        fi
+    fi
+    if [ -z "$DB_LIBS" ] && db_try "$sqlite_src" "" "-lsqlite3"; then
+        DB_LIBS=-lsqlite3
+    fi
+    [ -n "$DB_LIBS" ] || { result "no"; die \
+        "SQLite requested but not found." \
+        "Install libsqlite3-dev (Debian/Ubuntu), sqlite-devel (Fedora/RHEL)," \
+        "sqlite3-devel (Mageia) or sqlite (Arch, BSD ports)."; }
+    DB_SRC="core/DB-SQLite.cpp"
+    DB_DEFINE="-D_WITH_SQLITE"
+    result "SQLite"
+    ;;
+
+postgres)
+    pg_src='
+#include <libpq-fe.h>
+int main() { PGconn* c = PQconnectdb(""); PQfinish(c); return 0; }'
+    if have_pkg libpq; then
+        _c=$("$PKG_CONFIG" --cflags libpq); _l=$("$PKG_CONFIG" --libs libpq)
+        if db_try "$pg_src" "$_c" "$_l"; then DB_CFLAGS=$_c; DB_LIBS=$_l; fi
+    fi
+    if [ -z "$DB_LIBS" ] && have_prog pg_config; then
+        _c="-I$(pg_config --includedir)"; _l="-L$(pg_config --libdir) -lpq"
+        if db_try "$pg_src" "$_c" "$_l"; then DB_CFLAGS=$_c; DB_LIBS=$_l; fi
+    fi
+    if [ -z "$DB_LIBS" ]; then
+        for _c in "" -I/usr/include/postgresql -I/usr/include/pgsql \
+                  -I/usr/local/include/postgresql -I/usr/pkg/include/postgresql; do
+            if db_try "$pg_src" "$_c" "-lpq"; then
+                DB_CFLAGS=$_c; DB_LIBS=-lpq; break
+            fi
+        done
+    fi
+    [ -n "$DB_LIBS" ] || { result "no"; die \
+        "PostgreSQL requested but not found." \
+        "Install libpq-dev (Debian/Ubuntu) or postgresql-devel (Fedora/RHEL/SUSE)."; }
+    DB_SRC="core/DB-PostgreSQL.cpp"
+    DB_DEFINE="-D_WITH_POSTGRES"
+    result "PostgreSQL"
+    ;;
+
+mysql)
+    my_src='
+#include <mysql.h>
+int main() { MYSQL* m = mysql_init(0); if (m) mysql_close(m); return 0; }'
+    for p in mysqlclient libmariadb mariadb; do
+        [ -n "$DB_LIBS" ] && break
+        have_pkg "$p" || continue
+        _c=$("$PKG_CONFIG" --cflags "$p"); _l=$("$PKG_CONFIG" --libs "$p")
+        if db_try "$my_src" "$_c" "$_l"; then DB_CFLAGS=$_c; DB_LIBS=$_l; fi
+    done
+    if [ -z "$DB_LIBS" ]; then
+        for cfg in mariadb_config mysql_config; do
+            have_prog "$cfg" || continue
+            _c=$($cfg --cflags 2>/dev/null); _l=$($cfg --libs 2>/dev/null)
+            if db_try "$my_src" "$_c" "$_l"; then
+                DB_CFLAGS=$_c; DB_LIBS=$_l; break
+            fi
+        done
+    fi
+    if [ -z "$DB_LIBS" ]; then
+        for _c in "" -I/usr/include/mysql -I/usr/include/mariadb \
+                  -I/usr/local/include/mysql -I/usr/pkg/include/mysql; do
+            for _l in -lmysqlclient -lmariadb; do
+                if db_try "$my_src" "$_c" "$_l"; then
+                    DB_CFLAGS=$_c; DB_LIBS=$_l; break
+                fi
+            done
+            [ -n "$DB_LIBS" ] && break
+        done
+    fi
+    [ -n "$DB_LIBS" ] || { result "no"; die \
+        "MySQL/MariaDB requested but not found." \
+        "Install libmysqlclient-dev or libmariadb-dev (Debian/Ubuntu)," \
+        "mariadb-devel or community-mysql-devel (Fedora/RHEL), or mariadb (Arch)."; }
+    DB_SRC="core/DB-MySQL.cpp"
+    DB_DEFINE="-D_WITH_MYSQL"
+    result "MySQL/MariaDB"
+    ;;
+esac
+
+#------------------------------------------------------------------------------
+# 11. Skein
+#------------------------------------------------------------------------------
+checking "for Skein"
+SKEIN=
+SKEIN_CPPFLAGS=
+SKEIN_DEFINE=
+if [ "$with_skein" = yes ]; then
+    [ -f "$srcdir/skein/Optimized_32bit/skein.c" ] || die \
+        "the bundled Skein sources are missing from $srcdir/skein/."
+    SKEIN=yes
+    SKEIN_CPPFLAGS="-I\$(srcdir)/skein/Optimized_32bit"
+    result "bundled (Optimized_32bit)"
+else
+    SKEIN_DEFINE="-D_WITHOUT_SKEIN"
+    result "disabled"
+    warn \
+      "Skein is DISABLED (--without-skein). This is not a cosmetic build option:" \
+      "" \
+      "  * HashPassword() becomes a no-op that always returns false" \
+      "    (core/utility.cpp)." \
+      "  * The hub calls exit(EXIT_FAILURE) on startup if it ever reads an" \
+      "    already-hashed password from cfg/RegisteredUsers (core/hashRegManager.cpp)." \
+      "" \
+      "In other words the resulting binary cannot serve a hub that uses hashed" \
+      "passwords. Only use this if Skein genuinely will not build for you."
+fi
+
+#------------------------------------------------------------------------------
+# 12. Optimisation flags
+#------------------------------------------------------------------------------
+if [ "$enable_debug" = yes ]; then
+    DEFAULT_OPT="-O0 -g3"
+else
+    DEFAULT_OPT="-O2 -g"
+fi
+DEFAULT_WARN="-Wall -Wextra"
+
+#------------------------------------------------------------------------------
+# Write config.mk
+#------------------------------------------------------------------------------
+{
+cat <<MK
+# Generated by ./configure -- do not edit.
+#
+# Re-run with:
+#   ./configure$configure_args
+#
+CONFIGURE_ARGS :=$configure_args
+
+PACKAGE_NAME    := $PACKAGE_NAME
+PACKAGE_VERSION := $PACKAGE_VERSION
+srcdir          := $srcdir
+HOST_OS         := $host_os
+
+# Installation directories
+prefix       := $prefix
+exec_prefix  := $exec_prefix
+bindir       := $bindir
+datarootdir  := $datarootdir
+datadir      := $datadir
+docdir       := $docdir
+mandir       := $mandir
+
+# Tools
+CC         := $CC
+CXX        := $CXX
+AR         := $AR
+INSTALL    := $INSTALL
+PKG_CONFIG := $PKG_CONFIG
+
+# Flags chosen by configure; user CFLAGS/CXXFLAGS are appended after these
+# by the Makefile, so a value from the environment or command line wins.
+CONF_OPTFLAGS  := $DEFAULT_OPT
+CONF_WARNFLAGS := $DEFAULT_WARN
+CONF_CFLAGS    := $CFLAGS
+CONF_CXXFLAGS  := $CXXFLAGS
+CONF_CPPFLAGS  := $CPPFLAGS $EXTRA_CPPFLAGS
+CONF_LDFLAGS   := $LDFLAGS $EXTRA_LDFLAGS
+CONF_LIBS      := $LIBS
+
+# Feature selection
+FEATURE_DEFINES := $DB_DEFINE $SKEIN_DEFINE
+DB_BACKEND      := $with_database
+DB_SRC          := $DB_SRC
+DB_CFLAGS       := $DB_CFLAGS
+DB_LIBS         := $DB_LIBS
+
+SKEIN           := $SKEIN
+SKEIN_CPPFLAGS  := $SKEIN_CPPFLAGS
+
+TINYXML_BUNDLED  := $TINYXML_BUNDLED
+TINYXML_CPPFLAGS := $TINYXML_CPPFLAGS
+TINYXML_LIBS     := $TINYXML_LIBS
+
+LUA_CFLAGS  := $LUA_CFLAGS
+LUA_LIBS    := $LUA_LIBS
+LUA_VERSION := $lua_version
+
+ZLIB_CFLAGS := $ZLIB_CFLAGS
+ZLIB_LIBS   := $ZLIB_LIBS
+
+PTHREAD_CFLAGS := $PTHREAD_CFLAGS
+PTHREAD_LIBS   := $PTHREAD_LIBS
+ICONV_LIBS     := $ICONV_LIBS
+DL_LIBS        := $DL_LIBS
+SOCKET_LIBS    := $SOCKET_LIBS
+MK
+} > "$CONFIG_MK"
+
+#------------------------------------------------------------------------------
+# Summary
+#------------------------------------------------------------------------------
+if [ -n "$TINYXML_BUNDLED" ]; then
+    tinyxml_desc="bundled (TIXML_USE_STL)"
+else
+    case $TINYXML_CPPFLAGS in
+        *TIXML_USE_STL*) tinyxml_desc="system, STL layout" ;;
+        *)               tinyxml_desc="system, non-STL layout" ;;
+    esac
+fi
+
+if [ -n "$SKEIN" ]; then skein_desc="yes (Optimized_32bit)"
+else skein_desc="NO -- hashed passwords unsupported"; fi
+
+cat <<SUMMARY
+
+  $PACKAGE_NAME $PACKAGE_VERSION configuration
+  --------------------------------------------
+    host system ..... $host_os
+    prefix .......... $prefix
+    bindir .......... $bindir
+    C compiler ...... $CC
+    C++ compiler .... $CXX
+    optimisation .... $DEFAULT_OPT
+    Lua ............. ${lua_version:-unknown} ${lua_how:+($lua_how)}
+    tinyxml ......... $tinyxml_desc
+    zlib ............ ${zlib_version:-yes}
+    Skein ........... $skein_desc
+    database ........ $with_database
+
+  Now run:  make
+
+SUMMARY
