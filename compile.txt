@@ -5,10 +5,8 @@ Compiling PtokaX on Unix
     make
     sudo make install
 
-That is the whole thing. `configure` probes for everything it needs and writes
-config.mk; there are no per-distro or per-BSD make targets any more, and no
-`make -f makefile-something` variants. Run `./configure --help` for the full
-option list.
+`configure` probes for everything it needs and writes config.mk, which the
+Makefile reads. Run `./configure --help` for the full option list.
 
 
 Requirements
@@ -25,7 +23,7 @@ Optional, for database support:
     * PostgreSQL, or MySQL/MariaDB, or SQLite
 
 TinyXML and Skein are bundled in this source tree and are built automatically.
-You no longer need a system libtinyxml -- see "TinyXML" below for why.
+A system libtinyxml is not required -- see "TinyXML" below.
 
 
 Packages to install
@@ -105,9 +103,8 @@ of the module names distributions actually use (lua5.4, lua-5.4, lua54, then
 5.3, 5.2, 5.1, then a bare "lua"), and falls back to searching the usual include
 and library directories.
 
-Explicit versions are tried before the unqualified "lua" on purpose: on many
-current systems the bare lua.pc now points at Lua 5.5, which this release of
-PtokaX predates. configure warns if it ends up on anything newer than 5.4.
+Versioned module names are tried before the unqualified "lua", whose meaning
+varies by system. configure warns if it ends up on anything newer than 5.4.
 
 To pin a version:
 
@@ -125,15 +122,12 @@ If your Lua lives somewhere unusual, bypass detection entirely:
 TinyXML
 -------
 
-The copy in tinyxml/ is built into the hub by default. This is deliberate rather
-than merely convenient: TIXML_USE_STL switches TiXmlNode's `value` member between
-std::string and TiXmlString, so it changes the class layout. Every translation
-unit that includes <tinyxml.h> and the library itself must agree on it, and with
-a system libtinyxml you cannot know which way it was built. Building the bundled
-copy makes both sides agree by construction. (TinyXML 1 has also been unmaintained
-since 2011 and has been dropped from several distributions.)
+The copy in tinyxml/ is built into the hub by default. TIXML_USE_STL switches
+TiXmlNode's `value` member between std::string and TiXmlString, so it changes
+the class layout, and every translation unit that includes <tinyxml.h> must
+agree with the library. Building the bundled copy makes both sides agree.
 
-If you must unbundle it -- distribution packagers usually must -- use:
+To unbundle it, as distribution packagers usually must:
 
     ./configure --with-system-tinyxml
 
@@ -145,10 +139,14 @@ Skein
 -----
 
 The bundled Skein hash is built by default and is required for hashed passwords.
-`--without-skein` exists but is close to useless in practice: it makes
-HashPassword() a no-op that always returns false, and the hub calls
-exit(EXIT_FAILURE) at startup if it ever reads an already-hashed password from
-cfg/RegisteredUsers. configure prints a prominent warning if you ask for it.
+`--without-skein` makes HashPassword() a no-op that always returns false, and
+the hub calls exit(EXIT_FAILURE) at startup if it reads an already-hashed
+password from cfg/RegisteredUsers. configure warns if you ask for it.
+
+skein/ ships Optimized_32bit and Optimized_64bit. Upstream ships identical C
+sources in both (see skein/README/readme.txt); they differ only as slots for the
+hand-written assembly in skein/Additional_Implementations, which this build does
+not use. The build compiles Optimized_32bit.
 
 
 Other useful options
@@ -161,7 +159,25 @@ Other useful options
     make V=1                             show full compiler command lines
     make DESTDIR=/tmp/stage install      staged install, for packaging
     make help                            list targets and show the current config
+    make config                          re-run configure with the same options
     make clean / make distclean          remove build output / also config.mk
+
+Editing configure and running make re-runs it with the options it was last
+given. Reconfiguring rebuilds everything, since the options change compile
+flags.
+
+
+Building outside the source tree
+--------------------------------
+
+Run configure from the directory you want the build in:
+
+    mkdir build-sqlite && cd build-sqlite
+    ../configure --with-database=sqlite
+    make
+
+config.mk, the objects and the binary all land in that directory, so several
+configurations can coexist and the source tree stays clean.
 
 
 Binding ports below 1024

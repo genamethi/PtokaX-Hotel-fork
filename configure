@@ -21,6 +21,7 @@ esac
 
 CONFIG_MK=config.mk
 CONFIG_LOG=config.log
+config_log_ready=
 
 #------------------------------------------------------------------------------
 # Defaults
@@ -52,9 +53,9 @@ CXXFLAGS=${CXXFLAGS:-}
 CPPFLAGS=${CPPFLAGS:-}
 LDFLAGS=${LDFLAGS:-}
 LIBS=${LIBS:-}
-AR=${AR:-ar}
 PKG_CONFIG=${PKG_CONFIG:-pkg-config}
 INSTALL=${INSTALL:-}
+MAKE=${MAKE:-}
 
 # Remember the exact invocation so `make config` can replay it.
 configure_args=
@@ -78,7 +79,7 @@ warn() {
 die() {
     printf '\n'
     printf 'configure: error: %s\n' "$@"
-    printf '\nSee %s for details.\n' "$CONFIG_LOG"
+    [ -n "$config_log_ready" ] && printf '\nSee %s for details.\n' "$CONFIG_LOG"
     printf '\n'
     exit 1
 } >&2
@@ -123,7 +124,7 @@ Some influential environment variables:
   CC          C compiler            CFLAGS    C compiler flags
   CXX         C++ compiler          CXXFLAGS  C++ compiler flags
   CPPFLAGS    preprocessor flags    LDFLAGS   linker flags
-  LIBS        extra libraries       AR        archiver
+  LIBS        extra libraries       MAKE      GNU make program
   PKG_CONFIG  pkg-config program    INSTALL   install(1) program
 
 Report bugs to <PPK@PtokaX.org>.
@@ -133,8 +134,6 @@ USAGE
 #------------------------------------------------------------------------------
 # Argument parsing
 #------------------------------------------------------------------------------
-# POSIX parameter expansion, not expr: `expr` exits 1 on an empty match, which
-# would abort the script under `set -e` for e.g. `--prefix=`.
 optarg() { printf '%s' "${1#*=}"; }
 
 while [ $# -gt 0 ]; do
@@ -168,8 +167,8 @@ while [ $# -gt 0 ]; do
         --build=*) build_alias=$(optarg "$opt") ;;
         --host=*)  host_alias=$(optarg "$opt") ;;
 
-        # Accepted and ignored, so distro packaging macros (rpm %configure,
-        # dh_auto_configure) do not abort on options we have no use for.
+        # Accepted and ignored, for distro packaging macros (rpm %configure,
+        # dh_auto_configure).
         --target=*|--sbindir=*|--libdir=*|--libexecdir=*|--includedir=*) ;;
         --oldincludedir=*|--sysconfdir=*|--sharedstatedir=*) ;;
         --localstatedir=*|--runstatedir=*|--infodir=*|--localedir=*) ;;
@@ -185,7 +184,7 @@ while [ $# -gt 0 ]; do
             name=${opt%%=*}
             value=${opt#*=}
             case $name in
-                CC|CXX|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|LIBS|AR|PKG_CONFIG|INSTALL)
+                CC|CXX|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|LIBS|MAKE|PKG_CONFIG|INSTALL)
                     eval "$name=\$value" ;;
                 *) msg "configure: warning: ignoring unrecognised variable $name" ;;
             esac
@@ -229,6 +228,7 @@ esac
     echo "  uname -a: $(uname -a 2>/dev/null)"
     echo
 } >> "$CONFIG_LOG"
+config_log_ready=yes
 
 conftest_dir=
 cleanup() {
@@ -339,11 +339,29 @@ done
 CC=$found_cc
 result "$CC"
 
-# install(1): prefer a BSD/GNU-compatible one.
 if [ -z "$INSTALL" ]; then
     if have_prog ginstall; then INSTALL=ginstall
     elif have_prog install; then INSTALL=install
     else die "no install(1) program found; set INSTALL= to one."; fi
+fi
+
+checking "for GNU make"
+make_prog=
+for m in $MAKE gmake make; do
+    have_prog "$m" || continue
+    if "$m" --version 2>/dev/null | head -n 1 | grep -q 'GNU Make'; then
+        make_prog=$m
+        break
+    fi
+done
+if [ -n "$make_prog" ]; then
+    result "$make_prog"
+else
+    result "no"
+    make_prog=make
+    warn "no GNU make found. The Makefile uses GNU make pattern rules and" \
+         "functions; BSD make cannot read it. Install gmake and run that" \
+         "instead of make, or set MAKE= to your GNU make."
 fi
 
 #------------------------------------------------------------------------------
@@ -359,7 +377,6 @@ if [ -n "$host_alias" ] && [ -n "$build_alias" ] && \
          "All probes below run compiled test programs on the build machine."
 fi
 
-# Extra search roots, mirroring what the old per-OS makefile targets hardcoded.
 sys_prefixes="/usr"
 case $host_os in
     FreeBSD|OpenBSD|Darwin)  sys_prefixes="/usr /usr/local" ;;
@@ -508,8 +525,7 @@ fi
 # 8. Lua
 #
 # The source carries no LUA_5_x build define; it branches on Lua's own
-# LUA_VERSION_NUM. Only the include dir and library name vary, which is exactly
-# what the old lua51/lua52/lua53/freebsd/openbsd/netbsd targets hardcoded.
+# LUA_VERSION_NUM. Only the include dir and library name vary.
 #------------------------------------------------------------------------------
 checking "for Lua"
 LUA_CFLAGS=
@@ -517,8 +533,7 @@ LUA_LIBS=
 lua_how=
 lua_version=
 
-# Explicit versions come before a bare `lua` on purpose: on many systems the
-# unqualified lua.pc now points at 5.5, which this codebase predates.
+# Versioned module names are tried before the unqualified `lua`.
 lua_pkgs_54="lua5.4 lua-5.4 lua54"
 lua_pkgs_53="lua5.3 lua-5.3 lua53"
 lua_pkgs_52="lua5.2 lua-5.2 lua52"
@@ -559,7 +574,7 @@ if [ -n "$with_lua_cflags" ] || [ -n "$with_lua_libs" ]; then
             "  --with-lua-libs=$with_lua_libs"; }
     result "$lua_how"
 else
-    # Pass 1: pkg-config.
+    # pkg-config.
     for p in $lua_pkgs; do
         have_pkg "$p" || continue
         _cflags=$("$PKG_CONFIG" --cflags "$p")
@@ -574,7 +589,7 @@ else
         fi
     done
 
-    # Pass 2: brute-force include dir x library name, the old hardcoded paths.
+    # Brute-force include dir x library name.
     if [ -z "$LUA_LIBS" ]; then
         case $with_lua in
             auto) lua_vers="5.4 5.3 5.2 5.1" ;;
@@ -616,8 +631,8 @@ else
     result "${lua_version:-unknown} ($lua_how)"
 fi
 
-# Warn about Lua the source predates. Read LUA_VERSION_NUM from the real header
-# rather than trusting the package name.
+# The package name can lie about the release it resolves to, so read
+# LUA_VERSION_NUM out of the header that was actually found.
 lua_num=
 cat > "$conftest_dir/luaver.cpp" <<'LUAVER'
 extern "C" {
@@ -632,8 +647,6 @@ if $CXX "$conftest_dir/luaver.cpp" -o "$conftest_dir/luaver" \
 fi
 rm -f "$conftest_dir/luaver" "$conftest_dir/luaver.cpp"
 
-# Trust the header, not the package name: the pass-2 fallback can match a
-# generic -llua that turns out to be a different release entirely.
 if [ -n "$lua_num" ]; then
     lua_major=$((lua_num / 100))
     lua_minor=$((lua_num % 100))
@@ -660,23 +673,21 @@ case $with_lua in
 esac
 
 if [ -n "$lua_num" ] && [ "$lua_num" -gt 504 ]; then
-    warn "building against Lua $lua_version (newer than 5.4)." \
-         "$PACKAGE_NAME 0.5.3.0 predates it and its LUA_VERSION_NUM branches were" \
-         "never written against this release. The build may fail or scripts may" \
-         "misbehave. Pin a tested version with --with-lua=5.4 if that happens."
+    warn "building against Lua $lua_version, newer than the 5.4 this release was" \
+         "written against. The build may fail or scripts may misbehave." \
+         "Pin a tested version with --with-lua=5.4 if that happens."
 fi
 
 #------------------------------------------------------------------------------
 # 9. tinyxml
 #
 # TIXML_USE_STL flips TIXML_STRING between std::string and TiXmlString, and that
-# type is a *member* of TiXmlNode -- so it changes class layout. Both the library
-# and every TU that includes <tinyxml.h> must agree. The bundled build guarantees
-# that; a system library has to be probed for.
+# type is a *member* of TiXmlNode, so it changes class layout. The library and
+# every TU including <tinyxml.h> must agree, hence the link probe below.
 #------------------------------------------------------------------------------
 checking "for tinyxml"
-TINYXML_BUNDLED=
-TINYXML_CPPFLAGS=
+TINYXML_DIR=
+TINYXML_DEFINES=
 TINYXML_LIBS=
 
 tinyxml_stl_src='
@@ -700,17 +711,13 @@ int main() {
 if [ "$with_system_tinyxml" = yes ]; then
     if printf '%s\n' "$tinyxml_stl_src" \
          | try_link "$CXX" cpp -DTIXML_USE_STL $EXTRA_CPPFLAGS $EXTRA_LDFLAGS -ltinyxml; then
-        TINYXML_CPPFLAGS="-DTIXML_USE_STL"
+        TINYXML_DEFINES="-DTIXML_USE_STL"
         TINYXML_LIBS="-ltinyxml"
         result "system, built with STL"
     elif printf '%s\n' "$tinyxml_nostl_src" \
          | try_link "$CXX" cpp $EXTRA_CPPFLAGS $EXTRA_LDFLAGS -ltinyxml; then
-        TINYXML_CPPFLAGS=""
         TINYXML_LIBS="-ltinyxml"
         result "system, built without STL"
-        warn "the system libtinyxml was built WITHOUT TIXML_USE_STL." \
-             "This is supported, but the bundled copy (the default) is preferred:" \
-             "TinyXML 1 has been unmaintained since 2011."
     else
         result "no"
         die "--with-system-tinyxml was given, but no usable system libtinyxml" \
@@ -718,11 +725,10 @@ if [ "$with_system_tinyxml" = yes ]; then
             "Drop --with-system-tinyxml to build the bundled copy in tinyxml/."
     fi
 else
-    [ -f "$srcdir/tinyxml/tinyxml.cpp" ] || die \
-        "the bundled tinyxml sources are missing from $srcdir/tinyxml/."
-    TINYXML_BUNDLED=yes
-    TINYXML_CPPFLAGS="-I\$(srcdir)/tinyxml -DTIXML_USE_STL"
-    TINYXML_LIBS=
+    TINYXML_DIR=tinyxml
+    [ -f "$srcdir/$TINYXML_DIR/tinyxml.cpp" ] || die \
+        "the bundled tinyxml sources are missing from $srcdir/$TINYXML_DIR/."
+    TINYXML_DEFINES="-DTIXML_USE_STL"
     result "bundled (TIXML_USE_STL)"
 fi
 
@@ -838,28 +844,25 @@ esac
 # 11. Skein
 #------------------------------------------------------------------------------
 checking "for Skein"
-SKEIN=
-SKEIN_CPPFLAGS=
+SKEIN_DIR=
 SKEIN_DEFINE=
 if [ "$with_skein" = yes ]; then
-    [ -f "$srcdir/skein/Optimized_32bit/skein.c" ] || die \
-        "the bundled Skein sources are missing from $srcdir/skein/."
-    SKEIN=yes
-    SKEIN_CPPFLAGS="-I\$(srcdir)/skein/Optimized_32bit"
-    result "bundled (Optimized_32bit)"
+    SKEIN_DIR=skein/Optimized_32bit
+    [ -f "$srcdir/$SKEIN_DIR/skein.c" ] || die \
+        "the bundled Skein sources are missing from $srcdir/$SKEIN_DIR/."
+    result "bundled ($SKEIN_DIR)"
 else
     SKEIN_DEFINE="-D_WITHOUT_SKEIN"
     result "disabled"
     warn \
-      "Skein is DISABLED (--without-skein). This is not a cosmetic build option:" \
+      "Skein is DISABLED (--without-skein). The resulting binary cannot serve a" \
+      "hub that uses hashed passwords:" \
       "" \
-      "  * HashPassword() becomes a no-op that always returns false" \
-      "    (core/utility.cpp)." \
-      "  * The hub calls exit(EXIT_FAILURE) on startup if it ever reads an" \
-      "    already-hashed password from cfg/RegisteredUsers (core/hashRegManager.cpp)." \
+      "  * HashPassword() becomes a no-op that always returns false." \
+      "  * The hub calls exit(EXIT_FAILURE) on startup if it reads an" \
+      "    already-hashed password from cfg/RegisteredUsers." \
       "" \
-      "In other words the resulting binary cannot serve a hub that uses hashed" \
-      "passwords. Only use this if Skein genuinely will not build for you."
+      "Only use this if Skein genuinely will not build for you."
 fi
 
 #------------------------------------------------------------------------------
@@ -901,12 +904,12 @@ mandir       := $mandir
 # Tools
 CC         := $CC
 CXX        := $CXX
-AR         := $AR
 INSTALL    := $INSTALL
 PKG_CONFIG := $PKG_CONFIG
+MAKE       := $make_prog
 
-# Flags chosen by configure; user CFLAGS/CXXFLAGS are appended after these
-# by the Makefile, so a value from the environment or command line wins.
+# The Makefile appends the user's CFLAGS/CXXFLAGS after these, so a value from
+# the environment or command line wins.
 CONF_OPTFLAGS  := $DEFAULT_OPT
 CONF_WARNFLAGS := $DEFAULT_WARN
 CONF_CFLAGS    := $CFLAGS
@@ -922,12 +925,11 @@ DB_SRC          := $DB_SRC
 DB_CFLAGS       := $DB_CFLAGS
 DB_LIBS         := $DB_LIBS
 
-SKEIN           := $SKEIN
-SKEIN_CPPFLAGS  := $SKEIN_CPPFLAGS
+SKEIN_DIR       := $SKEIN_DIR
 
-TINYXML_BUNDLED  := $TINYXML_BUNDLED
-TINYXML_CPPFLAGS := $TINYXML_CPPFLAGS
-TINYXML_LIBS     := $TINYXML_LIBS
+TINYXML_DIR     := $TINYXML_DIR
+TINYXML_DEFINES := $TINYXML_DEFINES
+TINYXML_LIBS    := $TINYXML_LIBS
 
 LUA_CFLAGS  := $LUA_CFLAGS
 LUA_LIBS    := $LUA_LIBS
@@ -944,19 +946,25 @@ SOCKET_LIBS    := $SOCKET_LIBS
 MK
 } > "$CONFIG_MK"
 
+# Out-of-tree: drop in a Makefile so plain `make` works in the build directory.
+if [ "$srcdir" != "$(pwd)" ]; then
+    printf 'include %s/Makefile\n' "$srcdir" > Makefile
+    printf 'GENERATED_MAKEFILE := Makefile\n' >> "$CONFIG_MK"
+fi
+
 #------------------------------------------------------------------------------
 # Summary
 #------------------------------------------------------------------------------
-if [ -n "$TINYXML_BUNDLED" ]; then
+if [ -n "$TINYXML_DIR" ]; then
     tinyxml_desc="bundled (TIXML_USE_STL)"
 else
-    case $TINYXML_CPPFLAGS in
+    case $TINYXML_DEFINES in
         *TIXML_USE_STL*) tinyxml_desc="system, STL layout" ;;
         *)               tinyxml_desc="system, non-STL layout" ;;
     esac
 fi
 
-if [ -n "$SKEIN" ]; then skein_desc="yes (Optimized_32bit)"
+if [ -n "$SKEIN_DIR" ]; then skein_desc="yes ($SKEIN_DIR)"
 else skein_desc="NO -- hashed passwords unsupported"; fi
 
 cat <<SUMMARY
@@ -975,6 +983,6 @@ cat <<SUMMARY
     Skein ........... $skein_desc
     database ........ $with_database
 
-  Now run:  make
+  Now run:  $make_prog
 
 SUMMARY

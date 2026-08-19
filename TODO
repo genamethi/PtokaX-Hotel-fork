@@ -1,0 +1,5 @@
+TODO: Different Skein directories are redundant
+
+Their sources are identical -- upstream ships them that way -- so the names
+imply a word-size choice that does not exist and should not be kept. Flatten
+to a single skein/.
