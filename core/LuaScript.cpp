@@ -491,7 +491,10 @@ bool ScriptStart(Script * pScript) {
 	pScript->m_pNext = NULL;
 
 #ifdef _WIN32
-	pScript->m_pLua = lua_newstate(LuaAlocator, NULL);
+  #if LUA_VERSION_NUM > 504
+  	pScript->m_pLua = lua_newstate(LuaAlocator, NULL, luaL_makeseed(NULL));
+  #else
+  	pScript->m_pLua = lua_newstate(LuaAlocator, NULL);
 #else
 	pScript->m_pLua = luaL_newstate();
 #endif
