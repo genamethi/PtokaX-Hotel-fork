@@ -77,6 +77,7 @@ INCFLAGS := -I$(srcdir)/core \
             $(if $(TINYXML_DIR),-I$(srcdir)/$(TINYXML_DIR))
 
 ALL_CPPFLAGS := $(INCFLAGS) $(TINYXML_DEFINES) $(FEATURE_DEFINES) \
+                $(ICONV_DEFINES) \
                 $(LUA_CFLAGS) $(ZLIB_CFLAGS) $(DB_CFLAGS) \
                 $(CONF_CPPFLAGS) $(CPPFLAGS)
 
@@ -118,7 +119,7 @@ $(OBJS): config.mk
 
 config.mk: $(srcdir)/configure
 	@echo "  config.mk is older than configure; re-running configure"
-	$(Q)eval $(srcdir)/configure $(CONFIGURE_ARGS)
+	$(Q)eval "$(srcdir)/configure $(CONFIGURE_ARGS)"
 
 #*******************************************************************************
 # Install
@@ -169,7 +170,7 @@ distclean: clean
 
 .PHONY: config
 config:
-	$(Q)eval $(srcdir)/configure $(CONFIGURE_ARGS)
+	$(Q)eval "$(srcdir)/configure $(CONFIGURE_ARGS)"
 
 .PHONY: help
 help:

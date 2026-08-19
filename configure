@@ -244,15 +244,20 @@ try_link() {
     _cc=$1; _ext=$2; shift 2
     _src=$conftest_dir/conftest.$_ext
     _out=$conftest_dir/conftest.bin
+    case $_ext in
+        c) _langflags=$CFLAGS ;;
+        *) _langflags=$CXXFLAGS ;;
+    esac
     cat > "$_src"
     {
         echo "=============================================================="
-        echo "try_link: $_cc $* $_src -o $_out"
+        echo "try_link: $_cc $CPPFLAGS $_langflags $LDFLAGS $_src -o $_out $* $LIBS"
         echo "--- source ---"
         cat "$_src"
         echo "--- output ---"
     } >> "$CONFIG_LOG"
-    if $_cc "$_src" -o "$_out" "$@" >> "$CONFIG_LOG" 2>&1; then
+    if $_cc $CPPFLAGS $_langflags $LDFLAGS "$_src" -o "$_out" "$@" $LIBS \
+         >> "$CONFIG_LOG" 2>&1; then
         echo "--- exit 0 (success) ---" >> "$CONFIG_LOG"
         rm -f "$_out"
         return 0
@@ -267,15 +272,20 @@ try_compile() {
     _cc=$1; _ext=$2; shift 2
     _src=$conftest_dir/conftest.$_ext
     _obj=$conftest_dir/conftest.o
+    case $_ext in
+        c) _langflags=$CFLAGS ;;
+        *) _langflags=$CXXFLAGS ;;
+    esac
     cat > "$_src"
     {
         echo "=============================================================="
-        echo "try_compile: $_cc $* -c $_src -o $_obj"
+        echo "try_compile: $_cc $CPPFLAGS $_langflags -c $_src -o $_obj $*"
         echo "--- source ---"
         cat "$_src"
         echo "--- output ---"
     } >> "$CONFIG_LOG"
-    if $_cc -c "$_src" -o "$_obj" "$@" >> "$CONFIG_LOG" 2>&1; then
+    if $_cc $CPPFLAGS $_langflags -c "$_src" -o "$_obj" "$@" \
+         >> "$CONFIG_LOG" 2>&1; then
         echo "--- exit 0 (success) ---" >> "$CONFIG_LOG"
         rm -f "$_obj"
         return 0
@@ -489,6 +499,31 @@ else
     die "iconv not found." \
         "Install a libiconv development package (GNU libiconv on the BSDs and" \
         "macOS; glibc already provides it on Linux)."
+fi
+
+checking "whether iconv takes const char **"
+ICONV_DEFINES=
+iconv_cast_head='
+#include <iconv.h>
+int main() {
+    iconv_t c = iconv_open("utf-8", "utf-8");
+    char * pIn = 0; char * pOut = 0;
+    size_t szInLeft = 0, szOutLeft = 0;'
+iconv_cast_tail='
+    iconv_close(c);
+    return 0;
+}'
+if printf '%s\n    iconv(c, (char **)&pIn, &szInLeft, &pOut, &szOutLeft);%s\n' \
+     "$iconv_cast_head" "$iconv_cast_tail" \
+     | try_compile "$CXX" cpp $EXTRA_CPPFLAGS; then
+    result "no"
+elif printf '%s\n    iconv(c, (const char **)&pIn, &szInLeft, &pOut, &szOutLeft);%s\n' \
+     "$iconv_cast_head" "$iconv_cast_tail" \
+     | try_compile "$CXX" cpp $EXTRA_CPPFLAGS; then
+    ICONV_DEFINES="-DICONV_CONST=const"
+    result "yes"
+else
+    result "unknown, leaving it to TextConverter.cpp"
 fi
 
 #------------------------------------------------------------------------------
@@ -847,7 +882,7 @@ checking "for Skein"
 SKEIN_DIR=
 SKEIN_DEFINE=
 if [ "$with_skein" = yes ]; then
-    SKEIN_DIR=skein/Optimized_32bit
+    SKEIN_DIR=skein/src
     [ -f "$srcdir/$SKEIN_DIR/skein.c" ] || die \
         "the bundled Skein sources are missing from $srcdir/$SKEIN_DIR/."
     result "bundled ($SKEIN_DIR)"
@@ -940,6 +975,7 @@ ZLIB_LIBS   := $ZLIB_LIBS
 
 PTHREAD_CFLAGS := $PTHREAD_CFLAGS
 PTHREAD_LIBS   := $PTHREAD_LIBS
+ICONV_DEFINES  := $ICONV_DEFINES
 ICONV_LIBS     := $ICONV_LIBS
 DL_LIBS        := $DL_LIBS
 SOCKET_LIBS    := $SOCKET_LIBS
