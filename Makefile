@@ -132,24 +132,12 @@ install: $(TARGET)
 	$(INSTALL) -m 755 $(TARGET) $(DESTDIR)$(bindir)/$(TARGET)
 	@echo ""
 	@echo "  $(TARGET) installed to $(DESTDIR)$(bindir)/$(TARGET)"
-	@echo "  Run 'make setcap' as root to let it bind ports below 1024."
 	@echo "  See compile.txt for seeding a config directory."
 	@echo ""
 
 .PHONY: uninstall
 uninstall:
 	rm -f $(DESTDIR)$(bindir)/$(TARGET)
-
-.PHONY: setcap
-setcap:
-	@if [ "$(HOST_OS)" != Linux ]; then \
-		echo "setcap is Linux-only; on $(HOST_OS) run PtokaX as root or use a high port."; \
-		exit 1; \
-	fi
-	setcap 'cap_net_bind_service=+ep' $(DESTDIR)$(bindir)/$(TARGET)
-	@echo "$(TARGET) may now bind ports below 1024."
-	@echo "Alternative, without capabilities:"
-	@echo "    sysctl -w net.ipv4.ip_unprivileged_port_start=411"
 
 #*******************************************************************************
 # Housekeeping
@@ -179,7 +167,6 @@ help:
 	@echo "  all        build $(TARGET) (default)"
 	@echo "  install    install to \$$(DESTDIR)\$$(bindir)"
 	@echo "  uninstall  remove the installed binary"
-	@echo "  setcap     allow binding ports < 1024 (Linux, needs root)"
 	@echo "  check      smoke test the built binary"
 	@echo "  clean      remove build output"
 	@echo "  distclean  also remove config.mk and config.log"

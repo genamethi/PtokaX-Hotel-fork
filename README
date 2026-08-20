@@ -15,6 +15,10 @@ Command line commands available:
 -v					- show PtokaX version with build date and time.
 /generatexmllanguage	- generate english language example file.
 
+Ports below 1024 (either, as root):
+setcap 'cap_net_bind_service=+ep' /usr/local/bin/PtokaX
+sysctl -w net.ipv4.ip_unprivileged_port_start=411
+
 In case when that version not start for you check logs directory, in most cases it log problem.
 
 When no config dir is specified then PtokaX running from console use actual directory, PtokaX running as daemon use current_user_home/.PtokaX !

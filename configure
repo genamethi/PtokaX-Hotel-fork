@@ -737,7 +737,7 @@ esac
 
 if [ -n "$lua_num" ] && [ "$lua_num" -gt 505 ]; then
   warn "building against Lua $lua_version, newer than the 5.5 this release was" \
-    "written against. The build may fail or scripts may misbehave." \
+    "written against. The build may fail or scripts may misbehave."
 fi
 
 #------------------------------------------------------------------------------
@@ -948,7 +948,7 @@ else
   result "disabled"
   warn \
     "Skein is DISABLED (--without-skein). PtokaX won't be able to" \
-    "hash user passwords." \
+    "hash user passwords."
 fi
 
 #------------------------------------------------------------------------------
