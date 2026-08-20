@@ -495,6 +495,7 @@ bool ScriptStart(Script * pScript) {
   	pScript->m_pLua = lua_newstate(LuaAlocator, NULL, luaL_makeseed(NULL));
   #else
   	pScript->m_pLua = lua_newstate(LuaAlocator, NULL);
+  #endif
 #else
 	pScript->m_pLua = luaL_newstate();
 #endif
