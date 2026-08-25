@@ -1,133 +1,108 @@
-PtokaX under systemd
-====================
+What changed for hub admins
+===========================
 
-See README.systemd for the unit file itself.
-
-The systemd instance is the hub, named after its HubName setting. A hub with
-HubName PXdev runs as ptokax@PXdev with its files under /var/lib/ptokax/PXdev.
+Only the differences from a hand-run PtokaX. README.systemd covers the unit.
 
 
-Setup
------
+Running
+-------
 
-	./configure --prefix=/usr && make -j8
-	sudo make install
-	sudo systemctl daemon-reload
-	sudo ptokaxctl create PXdev
-	sudo ptokaxctl setup PXdev
-	sudo systemctl enable --now ptokax@PXdev
+PtokaX runs in the foreground. -d and -p are gone, along with the pid file and
+the old init scripts. systemd supervises it instead.
 
-create seeds cfg/ from cfg.example and assigns ports. The first hub on a host
-gets 1209 and 411, later ones free ports from 4111 up.
+A hub is a systemd instance named after its HubName. A hub called PXdev is
+ptokax@PXdev.
 
-setup is the configuration menu, the same one as PtokaX -m. Set HubName and
-HubAddress there. It refuses to run against a hub that is up.
+	systemctl start|stop|restart ptokax@PXdev
+	systemctl stop ptokax.target		every hub on the host
+
+SIGHUP used to terminate. It now restarts the scripts, and nothing else, so
+they can be reloaded without opening a client.
+
+	ptokaxctl reload-scripts PXdev
+
+Same code path as ScriptMan.Restart(), so the same effects: script state is
+lost and bots re-announce. Nobody is disconnected.
 
 
-Paths
------
+Where the files went
+--------------------
 
-	/var/lib/ptokax/HubName/	created by systemd
-		cfg/			settings, bans, reglist
-		scripts/		.lua files
-		texts/			files served by hub commands
-		logs/			written only outside a service manager
+	/var/lib/ptokax/HubName/	cfg/ scripts/ texts/
+	/usr/share/ptokax/language/	shared, a per-hub language/ still wins
 	/etc/ptokax/HubName.conf	optional, sets PTOKAX_ARGS
-	/usr/share/ptokax/language/	16 translations shared by all hubs
 
-A language/ directory inside a hub's own tree overrides the shared one.
+systemd creates the tree, so it is not there until create or import has run.
+
+	sudo ptokaxctl path PXdev
+	sudo cp welcome.lua $(sudo ptokaxctl path PXdev)/scripts/
+
+By default the tree sits under /var/lib/private at 0700 root and needs sudo to
+reach. See "Identity".
 
 
-Commands
---------
+ptokaxctl
+---------
 
-	ptokaxctl list			hubs and state
-	ptokaxctl check HubName		configured against listening
-	ptokaxctl log HubName -f	journal for one hub
-	ptokaxctl backup HubName	tar the hub's tree
-	ptokaxctl unit show		installed unit against running systemd
-	systemctl reload ptokax@HubName
-	systemctl stop ptokax.target	every hub
+	create <hub>			new tree seeded from cfg.example
+	create <hub> --from DIR		new tree from an existing config dir
+	create <hub> --setup		as above, then straight into PtokaX -m
+	import <hub> <configdir>	into a hub that already exists
+	path <hub>			print the tree
+	check <hub>			configured ports against what is listening
+	setup <hub>			PtokaX -m, hub stopped
+	reload-scripts <hub>		restart the hub's scripts
+	log <hub> [-f]			journal for one hub
+	backup <hub> [file]
+	unit show|regenerate
 
-check output:
+create writes a TCPPorts line that does not collide with anything on the host.
+import copies your settings untouched, TCPPorts included.
 
-	state      /var/lib/ptokax/PXdev
-	unit       enabled, active
+
+Logging
+-------
+
+Output goes to the journal. logs/ is only written when PtokaX runs outside a
+service manager.
+
+	journalctl -u ptokax@PXdev -p err
+	journalctl PTOKAX_SCRIPT=welcome.lua
+	journalctl PTOKAX_PORT=411
+
+Priorities are real, so -p err and -p warning filter properly.
+
+A hub that binds some of its ports but not all now starts and warns, rather
+than being silent about it. check shows the same thing:
+
 	ports      1209;411
-	listening  Listening on 1209, 411
-
-ports against listening is the comparison worth making. A difference means
-something else already had the port. The hub starts on the ports it got and
-warns:
-
-	journalctl -u ptokax@PXdev -p warning
-
-
-Settings
---------
-
-Settings are held in memory and cfg/ is rewritten on shutdown, so an edit made
-to cfg/Settings.pxt while the hub is up is overwritten when it stops.
-
-What sticks: an op command in the hub, or ptokaxctl setup with the hub down.
-
-Scripts are not affected. Drop the .lua in scripts/, enable it in
-cfg/Scripts.pxt, reload.
-
-
-Reload and restart
-------------------
-
-	reload		log files, MOTD, texts, scripts. Nobody drops.
-	restart		also rebinds sockets. Everyone drops.
-
-Ports and settings are picked up on restart only.
-
-A running hub keeps the old binary until it restarts, so an upgrade needs a
-restart rather than a reload.
+	listening  Listening on 1209
 
 
 Identity
 --------
 
 Each hub runs as ptokax-HubName under DynamicUser=yes and cannot read another
-hub's files. cfg/Settings.pxt holds the database password in plaintext, so this
-matters when one machine runs hubs for different owners.
+hub's files.
 
-	default		transient uid, tree under /var/lib/private at 0700
-			root, sudo to look inside
+	default		transient uid, tree at 0700 root under /var/lib/private
 	stable uid	add a static user, see ptokax.sysusers.example
 	group access	stable uid plus group-access.conf.example, which drops
 			DynamicUser. Tree moves to /var/lib/ptokax/HubName at
-			0750, readable and writable by the ptokax-HubName group
-
-Group access trades the DynamicUser hardening for letting more than one person
-work on the hub without sudo.
+			0750 for the ptokax-HubName group
 
 Back up and restore as root. With id-mapped mounts the host shows the files
 owned by nobody in the first two modes.
 
 
-Port 411 on several hubs
-------------------------
+Several hubs on one machine
+---------------------------
 
-The kernel binds an address and port together, so it is one 411 per address,
-not per host. IPv6 makes addresses cheap.
+Instances make this routine. One 411 per address, so give each hub its own
+address and turn on bind only single IP.
 
 	ip -6 addr add 2001:db8:1::10/64 dev eth0
-	ip -6 addr add 2001:db8:1::11/64 dev eth0
 
-Put them in the network configuration too, the above does not survive a reboot.
-Then for each hub, in ptokaxctl setup, set HubAddress to a name that resolves
-to its address and turn on bind only single IP.
-
-The bound address is whatever HubAddress resolves to, so this works when the
-address you hand out is the address you bind. Behind NAT it is not, and socket
-activation covers that case instead, since ListenStream= names the bind address
-directly. README.systemd.
-
-Two hubs cannot share one address. The hub sends $Lock before the client says
-anything, so a proxy has nothing to route on.
-
-With one IPv4 address and no IPv6, one hub gets 411 and the rest take other
-ports. Clients reach those as dchub://example.org:4111.
+The bound address comes from resolving HubAddress, so this holds when the
+address you hand out is the one you bind. Behind NAT it is not, and socket
+activation covers that instead. README.systemd.

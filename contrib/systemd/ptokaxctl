@@ -56,24 +56,40 @@ pick_ports() {
 
 is_active() { systemctl is-active --quiet "$(unit_of "$1")"; }
 
+# borrows the unit's identity without starting the hub
+make_state_dir() {
+	systemd-run --quiet --collect --wait --pipe \
+		--unit="ptokax-mkdir-$1" \
+		--property="User=ptokax-$1" \
+		--property="DynamicUser=yes" \
+		--property="StateDirectory=ptokax/$1" \
+		--property="StateDirectoryMode=0700" \
+		/bin/true >/dev/null 2>&1 ||
+		die "could not create the state directory for $1"
+}
+
 usage() {
 	cat <<EOF
 Usage: $self <command> [args]
 
-  list                       instances known to systemd, with state
-  create <instance>          seed a state directory and run the setup menu
-  setup <instance>           run the PtokaX configuration menu (instance must be stopped)
-  check <instance>           validate an instance's configuration
-  start|stop|restart <instance>
-  status <instance>
-  enable|disable <instance>
-  log <instance> [-f]        journal for one instance
-  backup <instance> [file]   tar the instance state directory
+  list                       hubs known to systemd, with state
+  create <hub> [--from DIR] [--setup]
+                             new hub, optionally from an existing config dir
+  import <hub> <configdir>   bring an existing PtokaX config directory in
+  path <hub>                 print the state directory
+  setup <hub>                run the PtokaX configuration menu, hub must be stopped
+  check <hub>                configured ports against what is listening
+  reload-scripts <hub>       restart the hub's scripts
+  start|stop|restart <hub>
+  status <hub>
+  enable|disable <hub>
+  log <hub> [-f]             journal for one hub
+  backup <hub> [file]        tar the hub's state directory
   unit show                  installed unit vs. the running systemd version
   unit regenerate            re-render the unit for the running systemd
 
-Editing cfg/Settings.pxt while an instance is running loses the edit: the hub holds
-settings in memory and rewrites cfg/ on every stop. Use 'setup' with the hub stopped.
+cfg/ is rewritten on shutdown, so an edit made while the hub runs is lost. Use
+setup with the hub stopped.
 EOF
 }
 
@@ -86,40 +102,101 @@ cmd_list() {
 }
 
 cmd_create() {
-	need_root
-	check_instance "${1:-}"
-	dir=$(state_dir "$1")
-	if [ -d "$dir/cfg" ]; then
-		die "instance $1 already has configuration at $dir"
-	fi
-	# Start once so systemd creates the state directory with the right ownership,
-	# then stop -- this is what makes the seed land as the service's identity rather
-	# than as root.
-	printf '%s: creating state directory for %s\n' "$self" "$1"
-	systemctl start "$(unit_of "$1")" || true
-	systemctl stop "$(unit_of "$1")" || true
-	if [ -d "$SEEDDIR" ] && [ -d "$dir" ]; then
-		mkdir -p "$dir/cfg"
-		for f in "$SEEDDIR"/*; do
-			[ -e "$f" ] || continue
-			[ -e "$dir/cfg/${f##*/}" ] || cp "$f" "$dir/cfg/"
-		done
-		chown -R --reference="$dir" "$dir/cfg" 2>/dev/null || true
-	fi
+	hub=${1:-}
+	check_instance "$hub"
+	shift 2>/dev/null || true
 
-	if [ -f "$dir/cfg/Settings.pxt" ] && ! grep -qE '^[[:space:]]*TCPPorts[[:space:]]*=' "$dir/cfg/Settings.pxt"; then
-		ports=$(pick_ports)
-		printf 'TCPPorts\t=\t%s\n' "$ports" >> "$dir/cfg/Settings.pxt"
-		chown --reference="$dir" "$dir/cfg/Settings.pxt" 2>/dev/null || true
-		printf '%s: assigned ports %s\n' "$self" "$ports"
-
-		case $ports in
-		*411*) ;;
-		*) printf '%s: 411 is already in use on this host; only one hub per address can have it\n' "$self" ;;
+	from=
+	run_setup=no
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--from) from=${2:-}; [ -n "$from" ] || die "--from needs a directory"; shift 2 ;;
+		--from=*) from=${1#*=}; shift ;;
+		--setup) run_setup=yes; shift ;;
+		*) die "unknown option: $1" ;;
 		esac
+	done
+
+	[ -z "$from" ] || [ -d "$from/cfg" ] || die "$from does not look like a PtokaX config directory (no cfg/)"
+	need_root
+
+	dir=$(state_dir "$hub")
+	[ -d "$dir/cfg" ] && die "$hub already has configuration at $dir"
+
+	make_state_dir "$hub"
+
+	if [ -n "$from" ]; then
+		import_tree "$hub" "$from"
+	else
+		seed_tree "$hub"
+		assign_ports "$hub"
 	fi
 
-	printf '%s: seeded %s -- now run: %s setup %s\n' "$self" "$dir" "$self" "$1"
+	printf '\n  config   %s/cfg\n  scripts  %s/scripts\n  texts    %s/texts\n\n' "$dir" "$dir" "$dir"
+
+	if [ "$run_setup" = yes ]; then
+		cmd_setup "$hub"
+	fi
+}
+
+seed_tree() {
+	dir=$(state_dir "$1")
+	[ -d "$SEEDDIR" ] || return 0
+	mkdir -p "$dir/cfg"
+	for f in "$SEEDDIR"/*; do
+		[ -e "$f" ] || continue
+		[ -e "$dir/cfg/${f##*/}" ] || cp "$f" "$dir/cfg/"
+	done
+	chown -R --reference="$dir" "$dir/cfg" 2>/dev/null || true
+}
+
+assign_ports() {
+	dir=$(state_dir "$1")
+	[ -f "$dir/cfg/Settings.pxt" ] || return 0
+	grep -qE '^[[:space:]]*TCPPorts[[:space:]]*=' "$dir/cfg/Settings.pxt" && return 0
+
+	ports=$(pick_ports)
+	printf 'TCPPorts\t=\t%s\n' "$ports" >> "$dir/cfg/Settings.pxt"
+	chown --reference="$dir" "$dir/cfg/Settings.pxt" 2>/dev/null || true
+	printf '%s: assigned ports %s\n' "$self" "$ports"
+
+	case $ports in
+	*411*) ;;
+	*) printf '%s: 411 is taken on this host. Give this hub its own address to use 411.\n' "$self" ;;
+	esac
+}
+
+import_tree() {
+	dir=$(state_dir "$1")
+	for sub in cfg scripts texts language; do
+		[ -d "$2/$sub" ] || continue
+		mkdir -p "$dir/$sub"
+		cp -r "$2/$sub/." "$dir/$sub/"
+		printf '%s: imported %s\n' "$self" "$sub"
+	done
+	chown -R --reference="$dir" "$dir" 2>/dev/null || true
+}
+
+cmd_path() {
+	check_instance "${1:-}"
+	state_dir "$1"
+}
+
+cmd_import() {
+	check_instance "${1:-}"
+	src=${2:-}
+	[ -n "$src" ] || die "usage: $self import <hub> <configdir>"
+	[ -d "$src" ] || die "no such directory: $src"
+	[ -d "$src/cfg" ] || die "$src does not look like a PtokaX config directory (no cfg/)"
+	need_root
+
+	is_active "$1" && die "$1 is running, stop it first"
+
+	dir=$(state_dir "$1")
+	[ -d "$dir" ] || make_state_dir "$1"
+	import_tree "$1" "$src"
+
+	printf '%s: %s -- check ports with: %s check %s\n' "$self" "$dir" "$self" "$1"
 }
 
 cmd_setup() {
@@ -221,7 +298,10 @@ cmd=$1; shift
 
 case $cmd in
 list)              cmd_list "$@" ;;
+reload-scripts)    check_instance "${1:-}"; exec systemctl reload "$(unit_of "$1")" ;;
 create)            cmd_create "$@" ;;
+import)            cmd_import "$@" ;;
+path)              cmd_path "$@" ;;
 setup)             cmd_setup "$@" ;;
 check)             cmd_check "$@" ;;
 log)               cmd_log "$@" ;;

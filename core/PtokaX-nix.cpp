@@ -30,7 +30,6 @@
 #include "ServerThread.h"
 #include "serviceLoop.h"
 #include "SettingManager.h"
-#include "TextFileManager.h"
 #include "utility.h"
 //---------------------------------------------------------------------------
 static bool bTerminatedBySignal = false;
@@ -238,19 +237,9 @@ int main(int argc, char* argv[]) {
 			PxNotifyFormat("RELOADING=1\nMONOTONIC_USEC=%" PRIu64,
 				(uint64_t)tsNow.tv_sec * 1000000ULL + (uint64_t)(tsNow.tv_nsec / 1000));
 
-			LogEmit(PX_LOG_NOTICE, PX_SUB_HUB, "Reloading on SIGHUP");
-
-			LogReopenFiles();
-
-			SettingManager::m_Ptr->LoadMOTD();
-
-			if(TextFilesManager::m_Ptr != NULL) {
-				TextFilesManager::m_Ptr->RefreshTextFiles();
-			}
-
 			ScriptManager::m_Ptr->Restart();
 
-			LogEmit(PX_LOG_NOTICE, PX_SUB_HUB, "Reload complete");
+			LogEmit(PX_LOG_NOTICE, PX_SUB_HUB, "Scripts restarted");
 
 			PxNotify("READY=1");
 		}
