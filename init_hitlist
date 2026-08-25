@@ -1,0 +1,12 @@
+Fixing the service issues
+
+1. units first — supervision, stderr
+2. one sink: (priority, subsystem, msg)
+3. fold in AppendLog, AppendDebugLog, AppendDebugLogFormat, syslog
+4. stderr lines, <N> priority prefix
+5. journald parses it, no dependency
+6. then sd_journal_send, SCRIPT=foo.lua
+7. dlopen libsystemd, stderr fallback
+8. one fd + mutex
+9. ISO-8601, drop %c
+10. SETBOOL_LOG_SCRIPT_ERRORS gates file only
