@@ -1,0 +1,195 @@
+Running PtokaX under systemd
+============================
+
+Files here
+----------
+
+  ptokax@.service.in           templated unit, with version guards
+  unitgen.sh                   renders the template for a target systemd version
+  ptokax.target                group handle for every instance
+  ptokaxctl                    admin front-end
+  ptokax.sysusers.example      optional static user, one per instance
+  group-access.conf.example    drop-in: group access instead of a transient UID
+  no-capabilities.conf.example drop-in: drop CAP_NET_BIND_SERVICE
+
+Install
+-------
+
+  ./configure --prefix=/usr && make
+  sudo make install                          # binary
+  sudo make install-systemd                  # unit, target, ptokaxctl   [Phase 2]
+  sudo systemctl daemon-reload
+
+Until the install-systemd target lands, render and place the unit by hand:
+
+  ./contrib/systemd/unitgen.sh \
+      --systemd-version="$(systemctl --version | awk 'NR==1{print $2}')" \
+      --define=bindir=/usr/bin \
+      --define=sysconfdir=/etc \
+      --define=docdir=/usr/share/doc/ptokax \
+      < contrib/systemd/ptokax@.service.in \
+      | sudo tee /etc/systemd/system/'ptokax@.service' >/dev/null
+  sudo systemctl daemon-reload
+
+ptokaxctl carries the same @bindir@/@datadir@/@docdir@ placeholders and is substituted
+by the same install target. Running it from the source tree before then, override the
+paths in the environment:
+
+  PTOKAX_BIN=/usr/bin/PtokaX ./contrib/systemd/ptokaxctl list
+
+The unit needs systemd 240 or newer for Type=exec; older systemd gets Type=simple, which
+cannot report a failed start. Directives added after 240 are dropped automatically for
+older targets, so the rendered unit is always valid -- just less hardened.
+
+Instances
+---------
+
+One hub per instance name:
+
+  sudo ptokaxctl create main
+  sudo ptokaxctl setup main          # configuration menu; hub must be stopped
+  sudo systemctl enable --now ptokax@main
+
+  ptokaxctl list
+  ptokaxctl log main -f
+  systemctl stop ptokax.target       # every instance at once
+
+Each instance gets its own state directory and its own UID. Instance A cannot read
+instance B's files -- which matters, because cfg/Settings.pxt stores PostgresPass and
+MySQLPass in plaintext.
+
+Identity: three modes
+---------------------
+
+The unit sets `User=ptokax-%i` together with `DynamicUser=yes`. systemd uses a static
+user of that name if one exists, and otherwise allocates a transient UID. That gives
+three modes without changing the shipped unit.
+
+  A. Default. No setup. Transient UID per instance, released on stop. State lives at
+     /var/lib/ptokax/<instance>, which is a symlink into /var/lib/private -- mode 0700
+     root, so inspecting it needs sudo.
+
+  B. Stable UID. Create a static ptokax-<instance> user (ptokax.sysusers.example).
+     The UID is then reserved rather than drawn from the transient pool, so it cannot
+     be handed to a different service later. Note this does NOT change what the host
+     sees: where the kernel supports id-mapped mounts, systemd owns the state directory
+     as `nobody` (65534) on the host and maps it to the service's UID inside, whether
+     or not the static user exists. Verified on systemd 261 / kernel 7.1 -- both a
+     transient and a static instance showed 65534 on the host.
+
+     For backup, that means tar the directory as root and restore it as root; the
+     `nobody` ownership is what systemd expects to find. Do not "fix" it to a real UID.
+
+  C. Group access. Mode B plus group-access.conf.example, which turns DynamicUser off.
+     State moves to /var/lib/ptokax/<instance> at mode 0750, so members of the
+     ptokax-<instance> group can read logs and drop .lua files in without sudo. This is
+     the only mode that gives that; it costs the implied hardening DynamicUser brings.
+
+Port 411
+--------
+
+411 is the standard NMDC port and is privileged. The unit grants
+AmbientCapabilities=CAP_NET_BIND_SERVICE, which is scoped to the service rather than to
+the binary as `setcap` would be.
+
+Be aware that ambient capabilities are inherited across execve, and PtokaX exposes the
+full Lua standard library including os.execute and io.popen. A child process spawned by
+a hub script therefore holds CAP_NET_BIND_SERVICE. If you run untrusted scripts, move
+every port above 1023 and apply no-capabilities.conf.example.
+
+The alternative sometimes suggested -- `sysctl net.ipv4.ip_unprivileged_port_start=411`
+-- is not recommended. It applies to the whole host, and it opens not just 411 but every
+port from 411 to 1023 to every local process, 443 and 993 included.
+
+Several hubs on port 411
+------------------------
+
+The kernel binds (address, port), not port, so N hubs can each serve 411 given N
+addresses. IPv6 makes that cheap -- a /64 is more addresses than you will ever need.
+
+Sharing one address is not possible. The hub sends $Lock before the client sends
+anything, so there is nothing for a proxy to route on; no SNI equivalent exists.
+
+Two ways to give an instance its own address:
+
+  - Set BindOnlySingleIP in the instance's settings. The bound address is then taken
+    from the resolved HubAddress, so this only works when the address you advertise is
+    the address you bind -- not the case behind NAT.
+
+  - Socket activation, below. ListenStream= names the bind address directly and leaves
+    HubAddress free, which is the general answer.
+
+Socket activation
+-----------------
+
+systemd binds the sockets and passes them to the hub, so the hub needs no capability:
+
+  systemctl enable --now ptokax@main.socket
+  # plus no-capabilities.conf.example as a service drop-in
+
+Adoption is additive. The hub uses a passed socket when one matches a port in its
+TCPPorts setting, and binds any remaining port itself. That keeps the settings file
+authoritative and makes a disagreement visible rather than silent:
+
+  - a passed socket the hub does not want is logged at warning level
+  - a configured port the hub had to bind itself, and could not, is logged as an error
+
+ListenStream= cannot use %i, so per-instance ports go in a drop-in -- see the comments
+in ptokax@.socket.
+
+Editing configuration
+---------------------
+
+PtokaX holds its settings in memory and rewrites cfg/ on every stop. Editing
+cfg/Settings.pxt under a running hub loses the edit when the hub next shuts down.
+
+  - To change settings: stop the instance, then `ptokaxctl setup <instance>`.
+  - `ptokaxctl setup` refuses to run against an active instance for this reason.
+
+Logs
+----
+
+  ptokaxctl log main -f
+  journalctl PTOKAX_INSTANCE=main -p err
+
+Note that at present the hub still writes its own files under the state directory's
+logs/ and little reaches the journal beyond startup output. The logging rework that
+routes everything through the journal is tracked in ../../init_hitlist.
+
+Deliberate omissions
+--------------------
+
+  ProcSubset=pid          hides /proc/cpuinfo (CPU count) and /proc/net/arp, which
+                          backs a Lua-visible GetMacAddress call
+  PrivateUsers=yes        silently defeats CAP_NET_BIND_SERVICE
+  WatchdogSec=            the main loop can block inside a Lua handler or during the
+                          shutdown save; a watchdog would SIGABRT mid-write
+  network-online.target   a server that only accepts connections does not need it
+
+MemoryDenyWriteExecute=yes is safe for PUC Lua but breaks LuaJIT. If you built against
+LuaJIT, override it with a drop-in.
+
+Troubleshooting
+---------------
+
+status=203/EXEC, "Unable to locate executable"
+    The service runs with PrivateTmp=yes and therefore has its own /tmp. A binary
+    under /tmp is invisible to it even though it exists on the host. Install the
+    binary somewhere real.
+
+The hub starts but binds nothing
+    Start() only fails outright when no port binds at all. A partial failure -- 411
+    refused while 1209 succeeded -- leaves the hub running. Check the journal.
+
+Verifying a change to the unit
+------------------------------
+
+  systemd-analyze verify contrib/systemd/ptokax@.service
+  systemd-analyze security --offline=true --threshold=20 contrib/systemd/ptokax@.service
+
+The rendered unit currently scores 1.6 with every assessment passing.
+
+Mind the two scales: the exposure level is printed as 0.0-10.0, but --threshold= takes
+the same number times ten, and exits nonzero when the score exceeds it. A unit scoring
+1.6 passes --threshold=16 and fails --threshold=15. The 20 above leaves a little room
+for a directive that has to be dropped on an older systemd.

@@ -35,6 +35,8 @@
 #include "serviceLoop.h"
 #include "SettingManager.h"
 #include "UdpDebug.h"
+#include "logging.h"
+#include "sdnotify.h"
 #include "utility.h"
 #include "ZlibUtility.h"
 //---------------------------------------------------------------------------
@@ -123,7 +125,6 @@ bool ServerManager::m_bServerRunning = false, ServerManager::m_bServerTerminated
         HWND ServerManager::m_hWndActiveDialog;
 	#endif
 #else
-	bool ServerManager::m_bDaemon = false;
 #endif
 
 char ServerManager::m_sHubIP[16], ServerManager::m_sHubIP6[40];
@@ -176,6 +177,11 @@ void ServerManager::OnSecTimer() {
 
 	m_ui32AverageBytesSent += m_ui32UploadSpeed[m_ui8MinTick];
 	m_ui32AverageBytesRead += m_ui32DownloadSpeed[m_ui8MinTick];
+
+	if(m_ui8MinTick % 30 == 0) {
+		PxNotifyFormat("STATUS=%u users (peak %u), up %" PRIu64 "d %" PRIu64 "h %" PRIu64 "m",
+			m_ui32Logged, m_ui32Peak, m_ui64Days, m_ui64Hours, m_ui64Mins);
+	}
 
 #ifdef _BUILD_GUI
     MainWindow::m_Ptr->UpdateStats();
@@ -253,11 +259,7 @@ void ServerManager::Initialize() {
 
 	if(DirExist((m_sPath+"/logs").c_str()) == false) {
 		if(mkdir((m_sPath+"/logs").c_str(), 0755) == -1) {
-            if(m_bDaemon == true) {
-                syslog(LOG_USER | LOG_ERR, "Creating  of logs directory failed!\n");
-            } else {
-                printf("Creating  of logs directory failed!");
-            }
+            LogEmit(PX_LOG_ERR, PX_SUB_HUB, "Creating of logs directory failed!");
         }
 	}
 	if(DirExist((m_sPath+"/cfg").c_str()) == false) {
@@ -495,7 +497,7 @@ bool ServerManager::Start() {
 		::MessageBox(MainWindow::m_Ptr->m_hWnd, LanguageManager::m_Ptr->m_sTexts[LAN_NO_VALID_TCP_PORT_SPECIFIED], LanguageManager::m_Ptr->m_sTexts[LAN_ERROR], MB_OK|MB_ICONERROR);
         MainWindow::m_Ptr->EnableStartButton(TRUE);
 #else
-		AppendLog(LanguageManager::m_Ptr->m_sTexts[LAN_NO_VALID_TCP_PORT_SPECIFIED]);
+		AppendLog(LanguageManager::m_Ptr->m_sTexts[LAN_NO_VALID_TCP_PORT_SPECIFIED], false, PX_LOG_ERR);
 #endif
         return false;
     }

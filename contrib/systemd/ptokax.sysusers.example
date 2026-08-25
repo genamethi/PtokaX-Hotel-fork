@@ -1,0 +1,13 @@
+# Optional: pin one instance to a stable UID.
+#
+# The unit runs with DynamicUser=yes and User=ptokax-%i, so by default each instance
+# gets a transient UID that is released on stop. Create a static user of the matching
+# name and systemd will use it instead. Do that when file ownership has to survive a
+# restart -- restoring a backup tarball, or an external process reading the hub's state.
+#
+# Install as /usr/lib/sysusers.d/ptokax-<instance>.conf, one file per instance, then:
+#   systemd-sysusers
+#
+# 'u' rather than 'u!' -- the locked-account form needs systemd 257.
+
+u ptokax-main - "PtokaX DC hub (main)" /var/lib/ptokax/main -

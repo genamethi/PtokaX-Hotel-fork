@@ -341,10 +341,12 @@ void ScriptManager::RemoveRunningScript(Script * pScript) {
 
 void ScriptManager::SaveScripts() {
 #ifdef _WIN32
-    FILE * fScriptsFile = fopen((ServerManager::m_sPath + "\\cfg\\Scripts.pxt").c_str(), "wb");
+	string sScrPath = ServerManager::m_sPath + "\\cfg\\Scripts.pxt";
 #else
-	FILE * fScriptsFile = fopen((ServerManager::m_sPath + "/cfg/Scripts.pxt").c_str(), "wb");
+	string sScrPath = ServerManager::m_sPath + "/cfg/Scripts.pxt";
 #endif
+	char sScrTmp[PATH_MAX];
+	FILE * fScriptsFile = AtomicOpen(sScrPath.c_str(), sScrTmp, sizeof(sScrTmp));
     if(fScriptsFile == NULL) {
     	return;
     }
@@ -360,7 +362,7 @@ void ScriptManager::SaveScripts() {
         fprintf(fScriptsFile, "%s\t=\t%c\n", m_ppScriptTable[ui8i]->m_sName, m_ppScriptTable[ui8i]->m_bEnabled == true ? '1' : '0');
     }
 
-    fclose(fScriptsFile);
+	AtomicCommit(fScriptsFile, sScrTmp, sScrPath.c_str());
 }
 //------------------------------------------------------------------------------
 

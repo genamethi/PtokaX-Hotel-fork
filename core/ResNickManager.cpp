@@ -125,10 +125,12 @@ void ReservedNicksManager::Load() {
 
 void ReservedNicksManager::Save() const {
 #ifdef _WIN32
-    FILE * fReservedNicks = fopen((ServerManager::m_sPath + "\\cfg\\ReservedNicks.pxt").c_str(), "wb");
+	string sRnPath = ServerManager::m_sPath + "\\cfg\\ReservedNicks.pxt";
 #else
-	FILE * fReservedNicks = fopen((ServerManager::m_sPath + "/cfg/ReservedNicks.pxt").c_str(), "wb");
+	string sRnPath = ServerManager::m_sPath + "/cfg/ReservedNicks.pxt";
 #endif
+	char sRnTmp[PATH_MAX];
+	FILE * fReservedNicks = AtomicOpen(sRnPath.c_str(), sRnTmp, sizeof(sRnTmp));
     if(fReservedNicks == NULL) {
     	return;
     }
@@ -146,7 +148,7 @@ void ReservedNicksManager::Save() const {
 		fprintf(fReservedNicks, "%s\n", pCur->m_sNick);
     }
 
-	fclose(fReservedNicks);
+	AtomicCommit(fReservedNicks, sRnTmp, sRnPath.c_str());
 }
 //---------------------------------------------------------------------------
 

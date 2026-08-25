@@ -74,7 +74,6 @@
 	#include <sys/socket.h>
 	#include <sys/stat.h>
 	#include <sys/utsname.h>
-	#include <syslog.h>
 	#include <iconv.h>
 #endif
 #include <fcntl.h>
@@ -107,7 +106,12 @@
 #endif
 #include "pxstring.h"
 //---------------------------------------------------------------------------
-#define PtokaXVersionString "0.5.3.0"
+// configure supplies PACKAGE_VERSION; this fallback keeps a bare compiler invocation
+// working and must be kept in step with PACKAGE_VERSION in configure.
+#ifndef PACKAGE_VERSION
+	#define PACKAGE_VERSION "0.5.3.1-hotel-fork"
+#endif
+#define PtokaXVersionString PACKAGE_VERSION
 #define BUILD_NUMBER "567"
 const char g_sPtokaXTitle[] = "PtokaX DC Hub " PtokaXVersionString
 #ifdef _PtokaX_TESTING_

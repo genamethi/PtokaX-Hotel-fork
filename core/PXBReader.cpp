@@ -29,7 +29,7 @@
 #endif
 //--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-PXBReader::PXBReader() : m_pFile(NULL), m_pActualPosition(NULL), m_szRemainingSize(0), m_ui8AllocatedSize(0), m_bFullRead(false), m_pItemDatas(NULL), m_ui16ItemLengths(NULL), m_sItemIdentifiers(NULL), m_ui8ItemValues(NULL) {
+PXBReader::PXBReader() : m_pFile(NULL), m_sSavePath(), m_sTmpPath(), m_pActualPosition(NULL), m_szRemainingSize(0), m_ui8AllocatedSize(0), m_bFullRead(false), m_pItemDatas(NULL), m_ui16ItemLengths(NULL), m_sItemIdentifiers(NULL), m_ui8ItemValues(NULL) {
 	// ...
 }
 //--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -76,7 +76,11 @@ PXBReader::~PXBReader() {
 #endif
 
     if(m_pFile != NULL) {
-        fclose(m_pFile);
+		if(m_sTmpPath[0] != '\0') {
+			AtomicAbort(m_pFile, m_sTmpPath);
+		} else {
+			fclose(m_pFile);
+		}
     }
 }
 //--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -216,7 +220,13 @@ bool PXBReader::OpenFileSave(const char * sFilename, const uint8_t ui8Size) {
 		return false;
 	}
 
-	m_pFile = fopen(sFilename, "wb");
+	if(strlen(sFilename) >= sizeof(m_sSavePath)) {
+		return false;
+	}
+
+	strcpy(m_sSavePath, sFilename);
+
+	m_pFile = AtomicOpen(m_sSavePath, m_sTmpPath, sizeof(m_sTmpPath));
 
     if(m_pFile == NULL) {
         return false;
@@ -282,7 +292,7 @@ void PXBReader::WriteRemaining() {
         fwrite(ServerManager::m_pGlobalBuffer, 1, m_pActualPosition-ServerManager::m_pGlobalBuffer, m_pFile);
     }
 
-    fclose(m_pFile);
+	AtomicCommit(m_pFile, m_sTmpPath, m_sSavePath);
 	m_pFile = NULL;
 }
 //--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

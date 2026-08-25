@@ -22,14 +22,25 @@
 #include "eventqueue.h"
 #include "GlobalDataQueue.h"
 #include "LanguageManager.h"
+#include "logging.h"
 #include "LuaScriptManager.h"
+#include "sdlisten.h"
+#include "sdnotify.h"
 #include "ServerManager.h"
+#include "ServerThread.h"
 #include "serviceLoop.h"
 #include "SettingManager.h"
+#include "TextFileManager.h"
 #include "utility.h"
 //---------------------------------------------------------------------------
 static bool bTerminatedBySignal = false;
 static int iSignal = 0;
+static volatile sig_atomic_t bReloadRequested = 0;
+//---------------------------------------------------------------------------
+
+static void ReloadSigHandler(int /*iSig*/) {
+	bReloadRequested = 1;
+}
 //---------------------------------------------------------------------------
 
 static void SigHandler(int iSig) {
@@ -47,22 +58,31 @@ static void SigHandler(int iSig) {
 }
 //---------------------------------------------------------------------------
 
+static void Usage(FILE * fOut) {
+	fprintf(fOut, "Usage: PtokaX [-v] [-m] [-c configdir]\n\n"
+		"Options:\n"
+		"\t-c configdir\t- absolute path to PtokaX configuration directory.\n"
+		"\t-v\t\t- show PtokaX version with build date and time.\n"
+		"\t-m\t\t- show PtokaX configuration menu.\n"
+		"\t-h\t\t- show this help.\n"
+	);
+}
+//---------------------------------------------------------------------------
+
 int main(int argc, char* argv[]) {
+	PxListenFdsInit();
+
 	bool bSetup = false;
 
-	char * sPidFile = NULL;
-
 	for(int i = 1; i < argc; i++) {
-	    if(strcasecmp(argv[i], "-d") == 0) {
-	    	ServerManager::m_bDaemon = true;
-	    } else if(strcasecmp(argv[i], "-c") == 0) {
+	    if(strcasecmp(argv[i], "-c") == 0) {
 	    	if(++i == argc) {
-	            printf("Missing config directory!\n");
+	            fprintf(stderr, "Missing config directory!\n");
 	            return EXIT_FAILURE;
 	    	}
-	
+
 			if(argv[i][0] != '/') {
-	            printf("Config directory must be absolute path!\n");
+	            fprintf(stderr, "Config directory must be absolute path!\n");
 	            return EXIT_FAILURE;
 			}
 	
@@ -75,63 +95,30 @@ int main(int argc, char* argv[]) {
 	
 	        if(DirExist(ServerManager::m_sPath.c_str()) == false) {
 	        	if(mkdir(ServerManager::m_sPath.c_str(), 0755) == -1) {
-	                if(ServerManager::m_bDaemon == true) {
-	                    syslog(LOG_USER | LOG_ERR, "Config directory not exist and can't be created!\n");
-	                } else {
-	                    printf("Config directory not exist and can't be created!");
-	                }
+	                fprintf(stderr, "Config directory not exist and can't be created!\n");
 	            }
             }
-	    } else if(strcasecmp(argv[i], "-v") == 0) {
+	    } else if(strcasecmp(argv[i], "-v") == 0 || strcasecmp(argv[i], "--version") == 0) {
 	        printf("%s built on %s %s\n", g_sPtokaXTitle, __DATE__, __TIME__);
 	        return EXIT_SUCCESS;
-	    } else if(strcasecmp(argv[i], "-h") == 0) {
-	        printf("Usage: PtokaX [-d] [-v] [-m] [-c configdir] [-p pidfile]\n\n"
-				"Options:\n"
-				"\t-d\t\t- run as daemon.\n"
-				"\t-c configdir\t- absolute path to PtokaX configuration directory.\n"
-				"\t-p pidfile\t-p <pidfile>	- path with filename where PtokaX PID will be stored.\n"
-				"\t-v\t\t- show PtokaX version with build date and time.\n"
-				"\t-m\t\t- show PtokaX configuration menu.\n"
-			);
+	    } else if(strcasecmp(argv[i], "-h") == 0 || strcasecmp(argv[i], "--help") == 0) {
+	        Usage(stdout);
 	        return EXIT_SUCCESS;
-	    } else if(strcasecmp(argv[i], "-p") == 0) {
-	    	if(++i == argc) {
-	            printf("Missing pid file!\n");
-	            return EXIT_FAILURE;
-	    	}
-	
-			sPidFile = argv[i];
 	    } else if(strcasecmp(argv[i], "/generatexmllanguage") == 0) {
 	        LanguageManager::GenerateXmlExample();
 	        return EXIT_SUCCESS;
 	    } else if(strcasecmp(argv[i], "-m") == 0) {
 	    	bSetup = true;
 	    } else {
-	    	printf("Unknown parameter %s.\nUsage: PtokaX [-d] [-v] [-m] [-c configdir] [-p pidfile]\n\n"
-				"Options:\n"
-				"\t-d\t\t- run as daemon.\n"
-				"\t-c configdir\t- absolute path to PtokaX configuration directory.\n"
-				"\t-p pidfile\t-p <pidfile>	- path with filename where PtokaX PID will be stored.\n"
-				"\t-v\t\t- show PtokaX version with build date and time.\n"
-				"\t-m\t\t- show PtokaX configuration menu.\n",
-				argv[i]);
-	    	return EXIT_SUCCESS;
+	    	fprintf(stderr, "Unknown parameter %s.\n", argv[i]);
+	    	Usage(stderr);
+	    	return EXIT_FAILURE;
 		}
 	}
 	
 	if(ServerManager::m_sPath.size() == 0) {
-	    char* home;
 	    char curdir[PATH_MAX];
-	    if(ServerManager::m_bDaemon == true && (home = getenv("HOME")) != NULL) {
-	        ServerManager::m_sPath = string(home) + "/.PtokaX";
-	            
-	        if(DirExist(ServerManager::m_sPath.c_str()) == false) {
-	            if(mkdir(ServerManager::m_sPath.c_str(), 0755) == -1) {
-	                syslog(LOG_USER | LOG_ERR, "Config directory not exist and can't be created!\n");
-	            }
-	        }
-	    } else if(getcwd(curdir, PATH_MAX) != NULL) {
+	    if(getcwd(curdir, PATH_MAX) != NULL) {
 	        ServerManager::m_sPath = curdir;
 	    } else {
 	        ServerManager::m_sPath = ".";
@@ -148,74 +135,12 @@ int main(int argc, char* argv[]) {
 		return EXIT_SUCCESS;
 	}
 
-	if(ServerManager::m_bDaemon == true) {
-	    printf("Starting %s as daemon using %s as config directory.\n", g_sPtokaXTitle, ServerManager::m_sPath.c_str());
-	
-	    pid_t pid1 = fork();
-	    if(pid1 == -1) {
-	        syslog(LOG_USER | LOG_ERR, "First fork failed!\n");
-	        return EXIT_FAILURE;
-	    } else if(pid1 > 0) {
-	        return EXIT_SUCCESS;
-	    }
-
-	    if(setsid() == -1) {
-	        syslog(LOG_USER | LOG_ERR, "Setsid failed!\n");
-	        return EXIT_FAILURE;
-	    }
-	
-	    pid_t pid2 = fork();
-	    if(pid2 == -1) {
-	        syslog(LOG_USER | LOG_ERR, "Second fork failed!\n");
-	        return EXIT_FAILURE;
-	    } else if(pid2 > 0) {
-            return EXIT_SUCCESS;
-	    }
-
-		if(sPidFile != NULL) {
-			FILE * fw = fopen(sPidFile, "w");
-			if(fw != NULL) {
-				fprintf(fw, "%ld\n", (long)getpid());
-				fclose(fw);
-			}
-		}
-
-	    if(chdir("/") == -1) {
-	        syslog(LOG_USER | LOG_ERR, "chdir failed!\n");
-	        return EXIT_FAILURE;
-	    } else if(pid2 > 0) {
-        }
-	
-	    close(STDIN_FILENO);
-	    close(STDOUT_FILENO);
-	    close(STDERR_FILENO);
-	
-	    if(open("/dev/null", O_RDWR) == -1) {
-	        syslog(LOG_USER | LOG_ERR, "Failed to open /dev/null!\n");
-	        return EXIT_FAILURE;
-	    }
-	
-	    if(dup(0) == -1) {
-	        syslog(LOG_USER | LOG_ERR, "First dup(0) failed!\n");
-	        return EXIT_FAILURE;
-        }
-
-	    if(dup(0) == -1) {
-	        syslog(LOG_USER | LOG_ERR, "Second dup(0) failed!\n");
-	        return EXIT_FAILURE;
-        }
-	}
-	
 	sigset_t sst;
 	sigemptyset(&sst);
 	sigaddset(&sst, SIGPIPE);
 	sigaddset(&sst, SIGURG);
 	sigaddset(&sst, SIGALRM);
-	
-	if(ServerManager::m_bDaemon == true) {
-	    sigaddset(&sst, SIGHUP);
-	}
-	
+
 	pthread_sigmask(SIG_BLOCK, &sst, NULL);
 	
 	struct sigaction sigact;
@@ -238,7 +163,12 @@ int main(int argc, char* argv[]) {
 	    exit(EXIT_FAILURE);
 	}
 	
-	if(ServerManager::m_bDaemon == false && sigaction(SIGHUP, &sigact, NULL) == -1) {
+	struct sigaction sigreload;
+	sigreload.sa_handler = ReloadSigHandler;
+	sigemptyset(&sigreload.sa_mask);
+	sigreload.sa_flags = SA_RESTART;
+
+	if(sigaction(SIGHUP, &sigreload, NULL) == -1) {
 	    AppendDebugLog("%s - [ERR] Cannot create sigaction SIGHUP in main\n");
 	    exit(EXIT_FAILURE);
 	}
@@ -246,14 +176,47 @@ int main(int argc, char* argv[]) {
 	ServerManager::Initialize();
 
 	if(ServerManager::Start() == false) {
-		if(ServerManager::m_bDaemon == false) {
-		    printf("Server start failed!\n");
-		} else {
-		    syslog(LOG_USER | LOG_ERR, "Server start failed!\n");
-		}
+		LogEmit(PX_LOG_ERR, PX_SUB_HUB, "Server start failed!");
 		return EXIT_FAILURE;
-	} else if(ServerManager::m_bDaemon == false) {
-		printf("%s running...\n", g_sPtokaXTitle);
+	}
+
+	LogEmitFormat(PX_LOG_INFO, PX_SUB_HUB, "%s running", g_sPtokaXTitle);
+
+	PxReportUnclaimedFds();
+
+	{
+		char sPorts[128];
+		size_t szPos = 0;
+		uint16_t ui16Last = 0, ui16Bound = 0, ui16Wanted = 0;
+
+		while(ui16Wanted < 25 && SettingManager::m_Ptr->m_ui16PortNumbers[ui16Wanted] != 0) {
+			ui16Wanted++;
+		}
+
+		// only listeners that bound are on this list, so it cannot claim a dead port
+		for(ServerThread * pCur = ServerManager::m_pServersS; pCur != NULL; pCur = pCur->m_pNext) {
+			if(pCur->m_ui16Port == ui16Last) {
+				continue;
+			}
+
+			ui16Last = pCur->m_ui16Port;
+			ui16Bound++;
+
+			const int iLen = snprintf(sPorts + szPos, sizeof(sPorts) - szPos, szPos == 0 ? "%hu" : ", %hu", ui16Last);
+
+			if(iLen <= 0 || (size_t)iLen >= sizeof(sPorts) - szPos) {
+				break;
+			}
+
+			szPos += (size_t)iLen;
+		}
+
+		if(ui16Bound < ui16Wanted) {
+			LogEmitFormat(PX_LOG_WARNING, PX_SUB_HUB, "Only %hu of %hu configured ports are listening: %s",
+				ui16Bound, ui16Wanted, sPorts);
+		}
+
+		PxNotifyFormat("READY=1\nSTATUS=Listening on %s", sPorts);
 	}
 	
 	struct timespec sleeptime;
@@ -262,11 +225,36 @@ int main(int argc, char* argv[]) {
 	
 	while(true) {
 		ServiceLoop::m_Ptr->Looper();
-		
+
 		if(ServerManager::m_bServerTerminated == true) {
 		    break;
 		}
-	
+
+		if(bReloadRequested != 0) {
+			bReloadRequested = 0;
+
+			struct timespec tsNow;
+			clock_gettime(CLOCK_MONOTONIC, &tsNow);
+			PxNotifyFormat("RELOADING=1\nMONOTONIC_USEC=%" PRIu64,
+				(uint64_t)tsNow.tv_sec * 1000000ULL + (uint64_t)(tsNow.tv_nsec / 1000));
+
+			LogEmit(PX_LOG_NOTICE, PX_SUB_HUB, "Reloading on SIGHUP");
+
+			LogReopenFiles();
+
+			SettingManager::m_Ptr->LoadMOTD();
+
+			if(TextFilesManager::m_Ptr != NULL) {
+				TextFilesManager::m_Ptr->RefreshTextFiles();
+			}
+
+			ScriptManager::m_Ptr->Restart();
+
+			LogEmit(PX_LOG_NOTICE, PX_SUB_HUB, "Reload complete");
+
+			PxNotify("READY=1");
+		}
+
 	    if(bTerminatedBySignal == true) {
 	        if(ServerManager::m_bIsClose == true) {
 	            break;
@@ -289,7 +277,9 @@ int main(int argc, char* argv[]) {
 	        str += " ending...";
 	
 	        AppendLog(str.c_str());
-	
+
+	        PxNotify("STOPPING=1\nSTATUS=Saving configuration...");
+
 	        ServerManager::m_bIsClose = true;
 	        ServerManager::Stop();
 	
@@ -307,11 +297,7 @@ int main(int argc, char* argv[]) {
 	    nanosleep(&sleeptime, NULL);
 	}
 
-	if(ServerManager::m_bDaemon == false) {
-	    printf("%s ending...\n", g_sPtokaXTitle);
-	} else if(sPidFile != NULL) {
-		unlink(sPidFile);
-	}
+	LogEmitFormat(PX_LOG_INFO, PX_SUB_HUB, "%s ending", g_sPtokaXTitle);
 
     return EXIT_SUCCESS;
 }

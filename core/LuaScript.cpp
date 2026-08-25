@@ -38,6 +38,7 @@
 	#pragma hdrstop
 #endif
 //---------------------------------------------------------------------------
+#include "logging.h"
 #include "LuaScript.h"
 //---------------------------------------------------------------------------
 #include "IP2Country.h"
@@ -594,7 +595,7 @@ bool ScriptStart(Script * pScript) {
 		UdpDebug::m_Ptr->BroadcastFormat("[LUA] %s", sMsg.c_str());
 
         if(SettingManager::m_Ptr->m_bBools[SETBOOL_LOG_SCRIPT_ERRORS] == true) {
-            AppendLog(sMsg.c_str(), true);
+            LogEmitField(PX_LOG_ERR, PX_SUB_SCRIPT, "PTOKAX_SCRIPT", pScript->m_sName, sMsg.c_str());
         }
 
 		lua_close(pScript->m_pLua);
@@ -761,7 +762,7 @@ static bool ScriptOnError(Script * pScript, char * sErrorMsg, const size_t szMsg
 #endif
 
 		if(SettingManager::m_Ptr->m_bBools[SETBOOL_LOG_SCRIPT_ERRORS] == true) {
-			AppendLog(sMsg.c_str(), true);
+			LogEmitField(PX_LOG_ERR, PX_SUB_SCRIPT, "PTOKAX_SCRIPT", pScript->m_sName, sMsg.c_str());
 		}
 
         lua_settop(pScript->m_pLua, 0);
@@ -1177,7 +1178,7 @@ void ScriptError(Script * pScript) {
 	UdpDebug::m_Ptr->BroadcastFormat("[LUA] %s", sMsg.c_str());
 
     if(SettingManager::m_Ptr->m_bBools[SETBOOL_LOG_SCRIPT_ERRORS] == true) {
-        AppendLog(sMsg.c_str(), true);
+        LogEmitField(PX_LOG_ERR, PX_SUB_SCRIPT, "PTOKAX_SCRIPT", pScript->m_sName, sMsg.c_str());
     }
 
 	if((((pScript->m_ui16Functions & Script::ONERROR) == Script::ONERROR) == true && ScriptOnError(pScript, stmp, szLen) == false) ||

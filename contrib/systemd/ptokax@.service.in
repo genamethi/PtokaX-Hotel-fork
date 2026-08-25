@@ -1,0 +1,115 @@
+# PtokaX hub instance, templated on the instance name.
+#
+#   systemctl start ptokax@main
+#
+# Rendered by unitgen.sh, which strips directives newer than the target systemd.
+# Do not install this file directly; its version guards are not unit syntax.
+
+[Unit]
+Description=PtokaX Direct Connect hub -- instance %i
+Documentation=file:@docdir@/README.systemd
+# A server that only accepts connections must not pull in network-online.target
+# (systemd.special(7)). After=network.target is what orders shutdown correctly.
+After=network.target
+PartOf=ptokax.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+#@if systemd >= 253
+Type=notify-reload
+#@else
+Type=notify
+#@endif
+NotifyAccess=main
+
+# A statically created ptokax-%i is used if it exists; otherwise systemd allocates a
+# transient UID for this instance alone. Either way instances cannot read each other's
+# state, which matters because Settings.pxt stores database passwords in plaintext.
+User=ptokax-%i
+Group=ptokax-%i
+DynamicUser=yes
+
+StateDirectory=ptokax/%i
+StateDirectoryMode=0700
+RuntimeDirectory=ptokax/%i
+WorkingDirectory=%S/ptokax/%i
+
+# Defined empty so the ExecStart expansion below does not warn when the optional
+# EnvironmentFile is absent; the file overrides this when it exists.
+Environment=PTOKAX_ARGS=
+EnvironmentFile=-@sysconfdir@/ptokax/%i.conf
+# -c must be absolute and must be writable: ServerManager::Initialize() creates
+# cfg/ logs/ scripts/ texts/ under it, and the hub rewrites cfg/ on every stop.
+ExecStart=@bindir@/PtokaX -c %S/ptokax/%i $PTOKAX_ARGS
+#@if systemd < 253
+ExecReload=/bin/kill -HUP $MAINPID
+#@endif
+
+Restart=on-failure
+RestartSec=5s
+# Start() blocks on getaddrinfo() for the configured hub address.
+TimeoutStartSec=120s
+# FinalClose() writes five config files during shutdown; SIGKILL here truncates them.
+TimeoutStopSec=90s
+KillMode=mixed
+OOMPolicy=stop
+
+SyslogIdentifier=ptokax@%i
+LogExtraFields=PTOKAX_INSTANCE=%i
+# The hub reads stdin only for the -m menu, which is never run under the service.
+StandardInput=null
+StandardError=journal
+
+# Accepted sockets are O_NONBLOCK and the user list is walked every 100ms; there is no
+# select()/poll() anywhere, so no FD_SETSIZE ceiling applies.
+LimitNOFILE=65536
+# One thread per (address family x listening port), plus RegThread and UDPThread.
+TasksMax=128
+
+# --- privilege --------------------------------------------------------------
+# The default TCPPorts setting is "1209;411" and 411 is privileged. This capability
+# is inherited across execve and Lua scripts have os.execute -- see README.systemd.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+# Initialize() creates its subdirectories 0755. Nothing outside the service reads them
+# in the default identity mode; the group-access drop-in relaxes this to 0027.
+UMask=0077
+
+# --- filesystem -------------------------------------------------------------
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateMounts=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RemoveIPC=yes
+KeyringMode=private
+ProtectHostname=yes            #@since 242
+RestrictSUIDSGID=yes           #@since 242
+ProtectKernelLogs=yes          #@since 244
+ProtectClock=yes               #@since 245
+ProtectProc=invisible          #@since 247
+# ProcSubset=pid is deliberately absent: it hides /proc/cpuinfo (CPU count) and
+# /proc/net/arp (GetMacAddress, which is exposed to Lua).
+
+# --- kernel and syscalls ----------------------------------------------------
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@resources
+SystemCallErrorNumber=EPERM
+# Safe for PUC Lua. Breaks LuaJIT, which --with-lua= can select.
+MemoryDenyWriteExecute=yes
+# AF_UNIX and AF_NETLINK are required by glibc NSS: the getaddrinfo() in Start()
+# reaches systemd-resolved over a unix socket and uses netlink to sort addresses.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictFileSystems=@basic-api @common-block   #@since 250
+
+[Install]
+WantedBy=multi-user.target ptokax.target

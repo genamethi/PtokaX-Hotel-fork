@@ -72,7 +72,11 @@ inline size_t Allign1024(size_t n) { return (n+1); }
 inline size_t Allign16K(size_t n) { return (n+1); }
 inline size_t Allign128K(size_t n) { return (n+1); }
 
-void AppendLog(const char * sData, const bool bScript = false);
+void AppendLog(const char * sData, const bool bScript = false, const int iPriority = 5);
+
+FILE * AtomicOpen(const char * sPath, char * sTmpPath, const size_t szTmpSize);
+bool AtomicCommit(FILE * fw, const char * sTmpPath, const char * sPath);
+void AtomicAbort(FILE * fw, const char * sTmpPath);
 void AppendDebugLog(const char * sData);
 void AppendDebugLogFormat(const char * sFormatMsg, ...);
 

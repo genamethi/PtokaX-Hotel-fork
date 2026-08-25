@@ -1,27 +1,23 @@
 PtokaX 0.5.3.1 - Hotel fork
 ---------------------------
 
-Note from amenay: For now the CLI interface is the same.
-
 This is PtokaX version without gui able to run from console or as windows service.
 You can use for that version config files from gui version of PtokaX or you can create own config files, see examples in cfg.example directory.
 
 Command line commands available:
 -c <configdir>		- absolute path to PtokaX config directory (where will PtokaX have cfg, logs, scripts and texts directories).
--d					- run as daemon.
 -h					- show help.
 -m					- show PtokaX configuration menu.
--p <pidfile>		- path with filename where PtokaX PID will be stored.
 -v					- show PtokaX version with build date and time.
 /generatexmllanguage	- generate english language example file.
 
-Ports below 1024 (either, as root):
-setcap 'cap_net_bind_service=+ep' /usr/local/bin/PtokaX
-sysctl -w net.ipv4.ip_unprivileged_port_start=411
+PtokaX runs in the foreground; use a service manager to run it as a service. See
+contrib/systemd/README.systemd, which also covers binding ports below 1024.
 
-In case when that version not start for you check logs directory, in most cases it log problem.
+When no config dir is specified the current directory is used.
 
-When no config dir is specified then PtokaX running from console use actual directory, PtokaX running as daemon use current_user_home/.PtokaX !
+If it does not start, check the journal, or the logs directory when not running under
+a service manager.
 
 Homepage: http://www.PtokaX.org
 

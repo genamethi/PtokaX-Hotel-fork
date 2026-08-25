@@ -35,7 +35,6 @@ private:
     const SettingManager& operator=(const SettingManager&);
 
     void CreateDefaultMOTD();
-    void LoadMOTD();
     void SaveMOTD();
     void CheckMOTD();
 
@@ -44,6 +43,8 @@ private:
     void LoadXML();
 public:
     static SettingManager * m_Ptr;
+
+    void LoadMOTD();
 
     enum SetPreTxtIds {
         SETPRETXT_HUB_SEC,

@@ -2771,6 +2771,7 @@ void DcCommands::Unknown(DcCommand * pDcCommand, const bool bMyNick/* = false*/)
     if(ScriptManager::m_Ptr->Arrival(pDcCommand, ScriptManager::UNKNOWN_ARRIVAL) == false) {
 		UdpDebug::m_Ptr->BroadcastFormat("[SYS] Unknown command from %s (%s) - user closed. (%s)", pDcCommand->m_pUser->m_sNick, pDcCommand->m_pUser->m_sIP, pDcCommand->m_sCommand);
 
+		// tells a CTM-flood reflector to blacklist us, so never rate limit this
 		if(bMyNick == true) {
 			pDcCommand->m_pUser->SendCharDelayed("$Error CTM2HUB|", 15);
 		}

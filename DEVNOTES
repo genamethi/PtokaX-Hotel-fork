@@ -1,0 +1,75 @@
+Developer notes
+===============
+
+Scratch list of things a maintainer needs to know but that don't belong in README
+(user-facing) or TODO (work items). Add a line, keep it short.
+
+- Version string: change PACKAGE_VERSION in `configure`. It reaches the binary as
+  -DPACKAGE_VERSION via VERSION_DEFINES in config.mk; `core/stdinc.h` derives
+  PtokaXVersionString from it and carries a fallback literal that must be kept in step
+  for builds that bypass configure.
+
+- We need regression tests for legacy settings-file compatibility (`Settings.xml` and
+  the `.pxt`/`.pxb` readers). There is no test suite at all today, and the version
+  string feeds a compatibility check in `SettingManager`, so a version bump can silently
+  change load behaviour.
+
+- `ServerManager::Start` returns true when *any* port binds, which is success with a
+  warning rather than a bug. It is reported three ways now: the per-port bind error at
+  PX_LOG_ERR, a "only N of M configured ports are listening" warning, and a STATUS=
+  line naming only the ports actually bound. `ptokaxctl create` allocates free ports so
+  instances do not collide on the default "1209;411" in the first place.
+
+- Several hubs can all serve 411, because the kernel binds (address, port) -- one
+  address per hub. `SETBOOL_BIND_ONLY_SINGLE_IP` already does this
+  (`core/ServerThread.cpp:298,320`), and IPv6 makes the addresses free.
+  Sharing one address is not possible: the hub sends `$Lock` first
+  (`core/User.cpp:872`), so a multiplexer would have to pick a backend before the
+  client sends anything -- there is no SNI equivalent to route on.
+  What blocks the general case is the coupling noted in TODO: the bound address comes
+  from resolving the *advertised* `SETTXT_HUB_ADDRESS`, so bind-to-one-IP only works
+  when advertised and bound addresses are the same (not true behind NAT). Socket
+  activation fixes this incidentally -- `ListenStream=<addr>:411` names the bind
+  address in the unit and leaves `HubAddress` free.
+
+- Anti-flood suspend on an inherited socket uses `shutdown(fd, SHUT_RD)`, not close.
+  It refuses with RST exactly as closing the port does, and `listen()` revives the
+  same fd afterwards, so the service manager's socket is never destroyed. RST matters
+  for the DC reflection attack (Bica & Furtuna, "DC++ and DDOS Attacks"): the traffic
+  comes from thousands of innocent clients tricked by a forged $ConnectToMe, and a
+  silent SYN drop just makes them retransmit for several seconds. Do not "optimise"
+  this to a zero backlog for that reason, and never to accept-and-close -- at the
+  ~25k conn/sec that attack reaches, per-connection syscalls are the failure mode.
+
+- Amplifier role is closed. `DcCommands::ConnectToMe` (:861) and the $Search path
+  (:1543) both compare the advertised IP against the sender's and rewrite the command
+  when they differ; `CHECK_IP_IN_COMMANDS` is obsolete, so it cannot be switched off.
+  The NOIPCHECK profile right bypasses both and is granted to no default profile, not
+  even Master. $Search matters more than CTM here: results go out as UDP $SR from
+  every matching client, so one forged search would reflect off the whole userbase.
+
+- Victim role. `serviceLoop.cpp:663` withholds $Lock until the tick advances, so a CTM
+  flood usually costs no $Lock (63 bytes) -- but the delay is 0-1s depending on where
+  in the second the connection lands, so it is not a guarantee.
+  The `$Error CTM2HUB|` reply in `DcCommands::Unknown` (:2775) must NOT be rate limited.
+  It is the mitigation, not a courtesy: a client that receives it blacklists our address
+  and ignores every later forged CTM aimed here, so 15 bytes permanently removes one
+  reflector. Cost is ~15 bytes x the number of distinct reflectors, once -- not per
+  connection forever. PPK's UnknownArrival script does the same thing for hubs that
+  predate the built-in support; FlylinkDC++ implements the client half.
+  The UNKNOWN_ARRIVAL callback stays for the same reason plus custom anti-flood use.
+
+- Flood granularity, and which lever bites on which attack:
+    * `ServerThread::isFlooder` -- per IP, drops the one connection. NewConnectionsCount
+      10 / NewConnectionsTime 60 by default, plus MaxConnSameIP 5.
+    * `MaxSimultaneousLogins` (default 25, `serviceLoop.cpp:708`) -- global login-rate
+      budget, MAX/40 credits per 100ms loop refilling every ~4s, operators exempt,
+      stalled connections dropped after the 300s login timeout.
+    * `SuspendAccepts` -- global, stops accepts on every port for every source. Nothing
+      in the C++ triggers it; Lua does.
+  The login budget gates at STATE_ADDME_1LOOP, i.e. after $Lock/$Key/$ValidateNick/
+  $MyINFO. A CTM reflection connection dies in `Unknown` well before that, so the
+  budget does nothing there. It is the right brake on the $ForceMove shape, where the
+  redirected clients complete a real handshake and become real users -- and per-IP
+  limits bite there too, because those clients reconnect.
+

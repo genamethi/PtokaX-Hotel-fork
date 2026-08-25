@@ -86,8 +86,6 @@ public:
 	#ifndef _BUILD_GUI
         static bool m_bService;
 	#endif
-#else
-    static bool m_bDaemon;
 #endif
 
     static bool m_bCmdAutoStart, m_bCmdNoAutoStart, m_bCmdNoTray, m_bUseIPv4, m_bUseIPv6, m_bIPv6DualStack;

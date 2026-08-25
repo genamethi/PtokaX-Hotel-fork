@@ -77,7 +77,7 @@ INCFLAGS := -I$(srcdir)/core \
             $(if $(TINYXML_DIR),-I$(srcdir)/$(TINYXML_DIR))
 
 ALL_CPPFLAGS := $(INCFLAGS) $(TINYXML_DEFINES) $(FEATURE_DEFINES) \
-                $(ICONV_DEFINES) \
+                $(VERSION_DEFINES) $(PATH_DEFINES) $(ICONV_DEFINES) \
                 $(LUA_CFLAGS) $(ZLIB_CFLAGS) $(DB_CFLAGS) \
                 $(CONF_CPPFLAGS) $(CPPFLAGS)
 
@@ -124,20 +124,77 @@ config.mk: $(srcdir)/configure
 #*******************************************************************************
 # Install
 #*******************************************************************************
-# PtokaX resolves language/, cfg/, scripts/ and texts/ relative to its runtime
-# config directory (-c), so there is no system data directory to install.
+# cfg/, scripts/ and texts/ live in the runtime config directory (-c). language/ is
+# installed here so instances share one copy; a per-instance language/ still wins.
 .PHONY: install
 install: $(TARGET)
-	$(INSTALL) -d $(DESTDIR)$(bindir)
+	$(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(datadir)/ptokax/language
 	$(INSTALL) -m 755 $(TARGET) $(DESTDIR)$(bindir)/$(TARGET)
+	$(INSTALL) -m 644 $(srcdir)/language/*.xml $(DESTDIR)$(datadir)/ptokax/language/
 	@echo ""
 	@echo "  $(TARGET) installed to $(DESTDIR)$(bindir)/$(TARGET)"
 	@echo "  See compile.txt for seeding a config directory."
 	@echo ""
+ifeq ($(SYSTEMD),yes)
+	$(Q)$(MAKE) --no-print-directory install-systemd
+endif
+
+UNIT_SRC := $(srcdir)/contrib/systemd
+UNIT_SUBST := --define=bindir=$(bindir) \
+              --define=sysconfdir=$(sysconfdir) \
+              --define=datadir=$(datadir) \
+              --define=docdir=$(docdir)
+
+# re-renders when SYSTEMD_VERSION is overridden on the command line
+build/systemd/.stamp-$(SYSTEMD_VERSION):
+	$(Q)mkdir -p $(@D)
+	$(Q)rm -f build/systemd/.stamp-*
+	$(Q)touch $@
+
+build/systemd/ptokax@.service: $(UNIT_SRC)/ptokax@.service.in $(UNIT_SRC)/unitgen.sh \
+                               config.mk build/systemd/.stamp-$(SYSTEMD_VERSION)
+	$(call say,GEN,$@)
+	$(Q)$(UNIT_SRC)/unitgen.sh --systemd-version=$(SYSTEMD_VERSION) $(UNIT_SUBST) < $< > $@
+
+build/systemd/ptokax@.socket: $(UNIT_SRC)/ptokax@.socket.in $(UNIT_SRC)/unitgen.sh \
+                              config.mk build/systemd/.stamp-$(SYSTEMD_VERSION)
+	$(call say,GEN,$@)
+	$(Q)$(UNIT_SRC)/unitgen.sh --systemd-version=$(SYSTEMD_VERSION) $(UNIT_SUBST) < $< > $@
+
+build/systemd/ptokaxctl: $(UNIT_SRC)/ptokaxctl config.mk build/systemd/.stamp-$(SYSTEMD_VERSION)
+	$(call say,GEN,$@)
+	$(Q)$(UNIT_SRC)/unitgen.sh --systemd-version=$(SYSTEMD_VERSION) $(UNIT_SUBST) < $< > $@
+
+.PHONY: install-systemd
+install-systemd: build/systemd/ptokax@.service build/systemd/ptokax@.socket build/systemd/ptokaxctl
+	$(INSTALL) -d $(DESTDIR)$(systemdsystemunitdir) $(DESTDIR)$(bindir) \
+	            $(DESTDIR)$(datadir)/ptokax/systemd $(DESTDIR)$(docdir)
+	$(INSTALL) -m 644 build/systemd/ptokax@.service $(DESTDIR)$(systemdsystemunitdir)/
+	$(INSTALL) -m 644 build/systemd/ptokax@.socket $(DESTDIR)$(systemdsystemunitdir)/
+	$(INSTALL) -m 644 $(UNIT_SRC)/ptokax.target $(DESTDIR)$(systemdsystemunitdir)/
+	$(INSTALL) -m 755 build/systemd/ptokaxctl $(DESTDIR)$(bindir)/ptokaxctl
+	$(INSTALL) -m 644 $(UNIT_SRC)/ptokax@.service.in $(DESTDIR)$(datadir)/ptokax/systemd/
+	$(INSTALL) -m 755 $(UNIT_SRC)/unitgen.sh $(DESTDIR)$(datadir)/ptokax/systemd/
+	$(INSTALL) -m 644 $(UNIT_SRC)/README.systemd $(UNIT_SRC)/ADMIN-GUIDE $(UNIT_SRC)/*.example $(DESTDIR)$(docdir)/
+	$(INSTALL) -d $(DESTDIR)$(datadir)/ptokax/cfg.example
+	$(INSTALL) -m 644 $(srcdir)/cfg.example/* $(DESTDIR)$(datadir)/ptokax/cfg.example/
+	@echo ""
+	@echo "  units installed for systemd $(SYSTEMD_VERSION); now run as root:"
+	@echo "    systemctl daemon-reload"
+	@echo ""
+
+.PHONY: check-systemd
+check-systemd: build/systemd/ptokax@.service
+	systemd-analyze verify $<
+	systemd-analyze security --offline=true --threshold=20 $<
 
 .PHONY: uninstall
 uninstall:
 	rm -f $(DESTDIR)$(bindir)/$(TARGET)
+	rm -f $(DESTDIR)$(bindir)/ptokaxctl
+	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax@.service
+	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax.target
+	rm -rf $(DESTDIR)$(datadir)/ptokax
 
 #*******************************************************************************
 # Housekeeping
@@ -185,6 +242,7 @@ else
 	@echo "  Lua        $(LUA_VERSION)"
 	@echo "  database   $(DB_BACKEND)"
 	@echo "  tinyxml    $(if $(TINYXML_DIR),bundled,system)"
+	@echo "  systemd    $(if $(filter yes,$(SYSTEMD)),units for $(SYSTEMD_VERSION) -> $(systemdsystemunitdir),no)"
 	@echo "  Skein      $(if $(SKEIN_DIR),yes,no)"
 	@echo ""
 endif

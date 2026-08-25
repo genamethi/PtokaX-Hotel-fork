@@ -1,0 +1,133 @@
+PtokaX under systemd
+====================
+
+See README.systemd for the unit file itself.
+
+The systemd instance is the hub, named after its HubName setting. A hub with
+HubName PXdev runs as ptokax@PXdev with its files under /var/lib/ptokax/PXdev.
+
+
+Setup
+-----
+
+	./configure --prefix=/usr && make -j8
+	sudo make install
+	sudo systemctl daemon-reload
+	sudo ptokaxctl create PXdev
+	sudo ptokaxctl setup PXdev
+	sudo systemctl enable --now ptokax@PXdev
+
+create seeds cfg/ from cfg.example and assigns ports. The first hub on a host
+gets 1209 and 411, later ones free ports from 4111 up.
+
+setup is the configuration menu, the same one as PtokaX -m. Set HubName and
+HubAddress there. It refuses to run against a hub that is up.
+
+
+Paths
+-----
+
+	/var/lib/ptokax/HubName/	created by systemd
+		cfg/			settings, bans, reglist
+		scripts/		.lua files
+		texts/			files served by hub commands
+		logs/			written only outside a service manager
+	/etc/ptokax/HubName.conf	optional, sets PTOKAX_ARGS
+	/usr/share/ptokax/language/	16 translations shared by all hubs
+
+A language/ directory inside a hub's own tree overrides the shared one.
+
+
+Commands
+--------
+
+	ptokaxctl list			hubs and state
+	ptokaxctl check HubName		configured against listening
+	ptokaxctl log HubName -f	journal for one hub
+	ptokaxctl backup HubName	tar the hub's tree
+	ptokaxctl unit show		installed unit against running systemd
+	systemctl reload ptokax@HubName
+	systemctl stop ptokax.target	every hub
+
+check output:
+
+	state      /var/lib/ptokax/PXdev
+	unit       enabled, active
+	ports      1209;411
+	listening  Listening on 1209, 411
+
+ports against listening is the comparison worth making. A difference means
+something else already had the port. The hub starts on the ports it got and
+warns:
+
+	journalctl -u ptokax@PXdev -p warning
+
+
+Settings
+--------
+
+Settings are held in memory and cfg/ is rewritten on shutdown, so an edit made
+to cfg/Settings.pxt while the hub is up is overwritten when it stops.
+
+What sticks: an op command in the hub, or ptokaxctl setup with the hub down.
+
+Scripts are not affected. Drop the .lua in scripts/, enable it in
+cfg/Scripts.pxt, reload.
+
+
+Reload and restart
+------------------
+
+	reload		log files, MOTD, texts, scripts. Nobody drops.
+	restart		also rebinds sockets. Everyone drops.
+
+Ports and settings are picked up on restart only.
+
+A running hub keeps the old binary until it restarts, so an upgrade needs a
+restart rather than a reload.
+
+
+Identity
+--------
+
+Each hub runs as ptokax-HubName under DynamicUser=yes and cannot read another
+hub's files. cfg/Settings.pxt holds the database password in plaintext, so this
+matters when one machine runs hubs for different owners.
+
+	default		transient uid, tree under /var/lib/private at 0700
+			root, sudo to look inside
+	stable uid	add a static user, see ptokax.sysusers.example
+	group access	stable uid plus group-access.conf.example, which drops
+			DynamicUser. Tree moves to /var/lib/ptokax/HubName at
+			0750, readable and writable by the ptokax-HubName group
+
+Group access trades the DynamicUser hardening for letting more than one person
+work on the hub without sudo.
+
+Back up and restore as root. With id-mapped mounts the host shows the files
+owned by nobody in the first two modes.
+
+
+Port 411 on several hubs
+------------------------
+
+The kernel binds an address and port together, so it is one 411 per address,
+not per host. IPv6 makes addresses cheap.
+
+	ip -6 addr add 2001:db8:1::10/64 dev eth0
+	ip -6 addr add 2001:db8:1::11/64 dev eth0
+
+Put them in the network configuration too, the above does not survive a reboot.
+Then for each hub, in ptokaxctl setup, set HubAddress to a name that resolves
+to its address and turn on bind only single IP.
+
+The bound address is whatever HubAddress resolves to, so this works when the
+address you hand out is the address you bind. Behind NAT it is not, and socket
+activation covers that case instead, since ListenStream= names the bind address
+directly. README.systemd.
+
+Two hubs cannot share one address. The hub sends $Lock before the client says
+anything, so a proxy has nothing to route on.
+
+With one IPv4 address and no IPv6, one hub gets 411 and the rest take other
+ports. Clients reach those as dchub://example.org:4111.

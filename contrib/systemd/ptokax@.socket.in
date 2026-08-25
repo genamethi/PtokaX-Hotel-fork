@@ -1,0 +1,30 @@
+# Optional: let systemd own the listening sockets.
+#
+# The hub then needs no capability at all, so pair this with
+# no-capabilities.conf.example. Ports must match the instance's TCPPorts setting;
+# a socket the hub does not want is reported in the journal at start.
+#
+#   systemctl enable --now ptokax@main.socket
+#
+# ListenStream= cannot use %i, so per-instance ports go in a drop-in:
+#   /etc/systemd/system/ptokax@main.socket.d/10-ports.conf
+#       [Socket]
+#       ListenStream=
+#       ListenStream=1209
+#       ListenStream=411
+#
+# Naming an address rather than a bare port is what lets several hubs each serve
+# 411 on their own address.
+
+[Unit]
+Description=PtokaX hub sockets -- instance %i
+PartOf=ptokax@%i.service
+
+[Socket]
+ListenStream=411
+ListenStream=1209
+Backlog=512
+Service=ptokax@%i.service
+
+[Install]
+WantedBy=sockets.target

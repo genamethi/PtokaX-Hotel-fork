@@ -26,6 +26,8 @@
 #include "serviceLoop.h"
 #include "SettingManager.h"
 #include "UdpDebug.h"
+#include "logging.h"
+#include "sdlisten.h"
 #include "utility.h"
 //---------------------------------------------------------------------------
 #ifdef _WIN32
@@ -46,7 +48,7 @@ ServerThread::ServerThread(const int iAddrFamily, const uint16_t ui16PortNumber)
 #else
     m_ThreadId(0), m_Server(-1),
 #endif
-	m_ui32SuspendTime(0), m_iAdressFamily(iAddrFamily), m_bTerminated(false), m_pPrev(NULL), m_pNext(NULL), m_ui16Port(ui16PortNumber), 
+	m_ui32SuspendTime(0), m_iAdressFamily(iAddrFamily), m_bTerminated(false), m_bInheritedSck(false), m_pPrev(NULL), m_pNext(NULL), m_ui16Port(ui16PortNumber),
 	m_bActive(false), m_bSuspended(false) {
 
 #ifdef _WIN32
@@ -150,7 +152,9 @@ void ServerThread::Run() {
 				if(WSAEWOULDBLOCK != WSAGetLastError()) {
 #else
             if(s == -1) {
-                if(errno != EWOULDBLOCK) {
+                if(errno == EWOULDBLOCK || errno == EAGAIN) {
+                    nanosleep(&sleeptime, NULL);
+                } else {
                     if(errno == EMFILE) { // max opened file descriptors limit reached
                         sleep(1); // longer sleep give us better chance to have free file descriptor available on next accept call
                     } else {
@@ -225,6 +229,12 @@ void ServerThread::Close() {
 #ifdef _WIN32
 	closesocket(m_Server);
 #else
+	if(m_bInheritedSck == true) {
+		PxReleaseListenFd(m_Server);
+		m_bInheritedSck = false;
+		return;
+	}
+
     shutdown(m_Server, SHUT_RDWR);
 	close(m_Server);
 #endif
@@ -244,6 +254,27 @@ void ServerThread::WaitFor() {
 //---------------------------------------------------------------------------
 
 bool ServerThread::Listen(const bool bSilent/* = false*/) {
+#ifndef _WIN32
+	// resuming from suspend: the socket was never closed, only its backlog dropped
+	if(m_bInheritedSck == true) {
+		listen(m_Server, 512);
+		return true;
+	}
+
+	if(PxAdoptListenFd(m_iAdressFamily, m_ui16Port, &m_Server) == true) {
+		m_bInheritedSck = true;
+
+		// Close() cannot shutdown() an inherited socket to break accept(), so poll
+		// m_bTerminated instead
+		const int iFlags = fcntl(m_Server, F_GETFL, 0);
+		if(iFlags != -1) {
+			fcntl(m_Server, F_SETFL, iFlags | O_NONBLOCK);
+		}
+
+		return true;
+	}
+#endif
+
 	m_Server = socket(m_iAdressFamily, SOCK_STREAM, IPPROTO_TCP);
 #ifdef _WIN32
     if(m_Server == INVALID_SOCKET) {
@@ -261,7 +292,7 @@ bool ServerThread::Listen(const bool bSilent/* = false*/) {
 #ifdef _BUILD_GUI
             ::MessageBox(NULL, (string(LanguageManager::m_Ptr->m_sTexts[LAN_UNB_CRT_SRVR_SCK], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_UNB_CRT_SRVR_SCK]) + " " + string(m_ui16Port) + " ! " + LanguageManager::m_Ptr->m_sTexts[LAN_ERROR_CODE] + " " + string(WSAGetLastError())).c_str(), g_sPtokaXTitle, MB_OK | MB_ICONERROR);
 #else
-            AppendLog((string(LanguageManager::m_Ptr->m_sTexts[LAN_UNB_CRT_SRVR_SCK], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_UNB_CRT_SRVR_SCK]) + " " + string(m_ui16Port) + " ! " + LanguageManager::m_Ptr->m_sTexts[LAN_ERROR_CODE] + " " + string(errno)).c_str());
+            LogEmitField(PX_LOG_ERR, PX_SUB_HUB, "PTOKAX_PORT", string(m_ui16Port).c_str(), (string(LanguageManager::m_Ptr->m_sTexts[LAN_UNB_CRT_SRVR_SCK], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_UNB_CRT_SRVR_SCK]) + " " + string(m_ui16Port) + " ! " + LanguageManager::m_Ptr->m_sTexts[LAN_ERROR_CODE] + " " + string(errno)).c_str());
 #endif
         }
         return false;
@@ -274,7 +305,7 @@ bool ServerThread::Listen(const bool bSilent/* = false*/) {
             EventQueue::m_Ptr->AddThread(EventQueue::EVENT_SRVTHREAD_MSG,
                 ("[ERR] Server socket setsockopt error: " + string(errno)+" for port: "+string(m_ui16Port)).c_str());
         } else {
-            AppendLog((string(LanguageManager::m_Ptr->m_sTexts[LAN_SRV_SCKOPT_ERR], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_SRV_SCKOPT_ERR])+
+            LogEmitField(PX_LOG_ERR, PX_SUB_HUB, "PTOKAX_PORT", string(m_ui16Port).c_str(), (string(LanguageManager::m_Ptr->m_sTexts[LAN_SRV_SCKOPT_ERR], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_SRV_SCKOPT_ERR])+
                 ": " + string(ErrnoStr(errno))+" (" + string(errno)+") "+
                 string(LanguageManager::m_Ptr->m_sTexts[LAN_FOR_PORT_LWR], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_FOR_PORT_LWR])+": "+string(m_ui16Port)).c_str());
         }
@@ -343,7 +374,7 @@ bool ServerThread::Listen(const bool bSilent/* = false*/) {
 			::MessageBox(NULL, (string(LanguageManager::m_Ptr->m_sTexts[LAN_SRV_BIND_ERR], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_SRV_BIND_ERR]) + ": " + string(WSErrorStr(err)) + " (" + string(err) + ") " + LanguageManager::m_Ptr->m_sTexts[LAN_FOR_PORT_LWR] + ": " + string(m_ui16Port)).c_str(), 
 				g_sPtokaXTitle, MB_OK | MB_ICONERROR);
 #else
-            AppendLog((string(LanguageManager::m_Ptr->m_sTexts[LAN_SRV_BIND_ERR], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_SRV_BIND_ERR])+
+            LogEmitField(PX_LOG_ERR, PX_SUB_HUB, "PTOKAX_PORT", string(m_ui16Port).c_str(), (string(LanguageManager::m_Ptr->m_sTexts[LAN_SRV_BIND_ERR], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_SRV_BIND_ERR])+
 #ifdef _WIN32
 				": " + string(WSErrorStr(err))+" (" + string(err)+") "+
 #else
@@ -379,7 +410,7 @@ bool ServerThread::Listen(const bool bSilent/* = false*/) {
             ::MessageBox(NULL, (string(LanguageManager::m_Ptr->m_sTexts[LAN_SRV_LISTEN_ERR], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_SRV_LISTEN_ERR]) + ": " + string(WSErrorStr(err)) + " (" + string(err) + ") " + LanguageManager::m_Ptr->m_sTexts[LAN_FOR_PORT_LWR] + ": " + string(m_ui16Port)).c_str(), 
 				g_sPtokaXTitle, MB_OK | MB_ICONERROR);
 #else
-            AppendLog((string(LanguageManager::m_Ptr->m_sTexts[LAN_SRV_LISTEN_ERR], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_SRV_LISTEN_ERR])+": " + string(errno)+" "+string(LanguageManager::m_Ptr->m_sTexts[LAN_FOR_PORT_LWR], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_FOR_PORT_LWR])+": "+string(m_ui16Port)).c_str());
+            LogEmitField(PX_LOG_ERR, PX_SUB_HUB, "PTOKAX_PORT", string(m_ui16Port).c_str(), (string(LanguageManager::m_Ptr->m_sTexts[LAN_SRV_LISTEN_ERR], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_SRV_LISTEN_ERR])+": " + string(errno)+" "+string(LanguageManager::m_Ptr->m_sTexts[LAN_FOR_PORT_LWR], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_FOR_PORT_LWR])+": "+string(m_ui16Port)).c_str());
 #endif
         }
 #ifdef _WIN32
@@ -512,6 +543,13 @@ void ServerThread::SuspendSck(const uint32_t ui32Time) {
     	closesocket(m_Server);
 #else
         pthread_mutex_unlock(&m_mtxServerThread);
+
+		// refuses with RST like closing would, but leaves the fd for listen() to revive
+		if(m_bInheritedSck == true) {
+			shutdown(m_Server, SHUT_RD);
+			return;
+		}
+
     	close(m_Server);
 #endif
     }

@@ -98,6 +98,14 @@ void LanguageManager::Load() {
 #endif
             (size_t)SettingManager::m_Ptr->m_ui16TextsLens[SETTXT_LANGUAGE])+".xml";
 
+#if !defined(_WIN32) && defined(PTOKAX_DATADIR)
+		// instances share one installed copy unless they override it in their own dir
+		if(FileExist(sLanguageFile.c_str()) == false) {
+			sLanguageFile = string(PTOKAX_DATADIR)+"/language/"+string(SettingManager::m_Ptr->m_sTexts[SETTXT_LANGUAGE],
+				(size_t)SettingManager::m_Ptr->m_ui16TextsLens[SETTXT_LANGUAGE])+".xml";
+		}
+#endif
+
         TiXmlDocument doc(sLanguageFile.c_str());
         if(doc.LoadFile() == false) {
             if(doc.ErrorId() != TiXmlBase::TIXML_ERROR_OPENING_FILE && doc.ErrorId() != TiXmlBase::TIXML_ERROR_DOCUMENT_EMPTY) {

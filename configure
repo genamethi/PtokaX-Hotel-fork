@@ -33,6 +33,11 @@ datarootdir=
 datadir=
 docdir=
 mandir=
+sysconfdir=
+
+with_systemd=auto
+systemdsystemunitdir=
+sysusersdir=
 
 with_database=none
 with_lua=auto
@@ -99,6 +104,7 @@ Installation directories:
   --datadir=DIR           read-only architecture-independent data [DATAROOTDIR]
   --docdir=DIR            documentation root [DATAROOTDIR/doc/ptokax]
   --mandir=DIR            man documentation [DATAROOTDIR/man]
+  --sysconfdir=DIR        read-only single-machine data [PREFIX/etc]
 
 Optional features:
   --enable-debug          build with -O0 -g3 and no optimisation [no]
@@ -115,6 +121,9 @@ Optional packages:
                           explicit pkg-config module name [auto]
   --with-lua-cflags=FLAGS bypass Lua detection, use these compile flags
   --with-lua-libs=LIBS    bypass Lua detection, use these link flags
+  --with-systemd=WHEN     install systemd units: auto, yes, no [auto]
+  --with-systemdsystemunitdir=DIR   unit directory [pkg-config systemd]
+  --with-sysusersdir=DIR  sysusers.d directory [pkg-config systemd]
   --with-system-tinyxml   link the system libtinyxml instead of the bundled
                           copy. The bundled copy is the default because
                           TIXML_USE_STL changes TiXmlNode's layout, and only
@@ -151,6 +160,7 @@ while [ $# -gt 0 ]; do
   --datadir=*) datadir=$(optarg "$opt") ;;
   --docdir=*) docdir=$(optarg "$opt") ;;
   --mandir=*) mandir=$(optarg "$opt") ;;
+  --sysconfdir=*) sysconfdir=$(optarg "$opt") ;;
 
   --with-database=*) with_database=$(optarg "$opt") ;;
   --with-lua=*) with_lua=$(optarg "$opt") ;;
@@ -164,6 +174,12 @@ while [ $# -gt 0 ]; do
   --with-skein) with_skein=yes ;;
   --without-skein) with_skein=no ;;
 
+  --with-systemd) with_systemd=yes ;;
+  --with-systemd=*) with_systemd=$(optarg "$opt") ;;
+  --without-systemd) with_systemd=no ;;
+  --with-systemdsystemunitdir=*) systemdsystemunitdir=$(optarg "$opt") ;;
+  --with-sysusersdir=*) sysusersdir=$(optarg "$opt") ;;
+
   --enable-debug) enable_debug=yes ;;
   --disable-debug) enable_debug=no ;;
 
@@ -173,7 +189,7 @@ while [ $# -gt 0 ]; do
   # Accepted and ignored, for distro packaging macros (rpm %configure,
   # dh_auto_configure).
   --target=* | --sbindir=* | --libdir=* | --libexecdir=* | --includedir=*) ;;
-  --oldincludedir=* | --sysconfdir=* | --sharedstatedir=*) ;;
+  --oldincludedir=* | --sharedstatedir=*) ;;
   --localstatedir=* | --runstatedir=* | --infodir=* | --localedir=*) ;;
   --htmldir=* | --dvidir=* | --pdfdir=* | --psdir=*) ;;
   --disable-dependency-tracking | --enable-dependency-tracking) ;;
@@ -205,6 +221,7 @@ done
 : "${datadir:=$datarootdir}"
 : "${docdir:=$datarootdir/doc/ptokax}"
 : "${mandir:=$datarootdir/man}"
+: "${sysconfdir:=$prefix/etc}"
 
 case $with_database in
 none | no | sqlite | postgres | postgresql | mysql | mariadb) ;;
@@ -952,7 +969,50 @@ else
 fi
 
 #------------------------------------------------------------------------------
-# 12. Optimisation flags
+# 12. systemd unit installation
+#------------------------------------------------------------------------------
+checking "for systemd"
+SYSTEMD_VERSION=0
+case $with_systemd in
+auto)
+  if have_pkg systemd; then with_systemd=yes; else with_systemd=no; fi
+  ;;
+yes | no) ;;
+*) die "--with-systemd must be auto, yes or no" ;;
+esac
+
+if [ "$with_systemd" = yes ]; then
+  if have_pkg systemd; then
+    SYSTEMD_VERSION=$("$PKG_CONFIG" --modversion systemd 2>/dev/null)
+    : "${systemdsystemunitdir:=$("$PKG_CONFIG" --variable=systemdsystemunitdir systemd 2>/dev/null)}"
+    : "${sysusersdir:=$("$PKG_CONFIG" --variable=sysusersdir systemd 2>/dev/null)}"
+  elif have_prog systemctl; then
+    SYSTEMD_VERSION=$(systemctl --version 2>/dev/null | awk 'NR==1 {print $2; exit}')
+  fi
+
+  # "261.2-1-arch" -> 261
+  SYSTEMD_VERSION=${SYSTEMD_VERSION%%[!0-9]*}
+  : "${SYSTEMD_VERSION:=0}"
+
+  : "${systemdsystemunitdir:=$prefix/lib/systemd/system}"
+  : "${sysusersdir:=$prefix/lib/sysusers.d}"
+
+  if [ "$SYSTEMD_VERSION" -eq 0 ]; then
+    result "yes (version unknown)"
+    warn \
+      "systemd version undetected -- all guarded directives dropped." \
+      "Regenerate on the target with 'ptokaxctl unit regenerate'."
+  else
+    result "yes (systemd $SYSTEMD_VERSION)"
+    [ "$SYSTEMD_VERSION" -ge 240 ] || warn \
+      "systemd $SYSTEMD_VERSION is below 240; unit falls back to Type=simple."
+  fi
+else
+  result "disabled"
+fi
+
+#------------------------------------------------------------------------------
+# 13. Optimisation flags
 #------------------------------------------------------------------------------
 if [ "$enable_debug" = yes ]; then
   DEFAULT_OPT="-O0 -g3"
@@ -986,6 +1046,12 @@ datarootdir  := $datarootdir
 datadir      := $datadir
 docdir       := $docdir
 mandir       := $mandir
+sysconfdir   := $sysconfdir
+
+SYSTEMD              := $with_systemd
+SYSTEMD_VERSION      := $SYSTEMD_VERSION
+systemdsystemunitdir := $systemdsystemunitdir
+sysusersdir          := $sysusersdir
 
 # Tools
 CC         := $CC
@@ -1003,6 +1069,9 @@ CONF_CXXFLAGS  := $CXXFLAGS
 CONF_CPPFLAGS  := $CPPFLAGS $EXTRA_CPPFLAGS
 CONF_LDFLAGS   := $LDFLAGS $EXTRA_LDFLAGS
 CONF_LIBS      := $LIBS
+
+VERSION_DEFINES := -DPACKAGE_VERSION='"$PACKAGE_VERSION"'
+PATH_DEFINES    := -DPTOKAX_DATADIR='"$datadir/ptokax"'
 
 # Feature selection
 FEATURE_DEFINES := $DB_DEFINE $SKEIN_DEFINE
@@ -1055,6 +1124,10 @@ if [ -n "$SKEIN_DIR" ]; then
   skein_desc="yes ($SKEIN_DIR)"
 else skein_desc="NO -- hashed passwords unsupported"; fi
 
+if [ "$with_systemd" = yes ]; then
+  systemd_desc="units for systemd $SYSTEMD_VERSION -> $systemdsystemunitdir"
+else systemd_desc="no"; fi
+
 cat <<SUMMARY
 
   $PACKAGE_NAME $PACKAGE_VERSION configuration
@@ -1070,6 +1143,7 @@ cat <<SUMMARY
     zlib ............ ${zlib_version:-yes}
     Skein ........... $skein_desc
     database ........ $with_database
+    systemd ......... $systemd_desc
 
   Now run:  $make_prog
 

@@ -232,15 +232,17 @@ void SettingManager::LoadMOTD() {
 
 void SettingManager::SaveMOTD() {
 #ifdef _WIN32
-    FILE *fw = fopen((ServerManager::m_sPath + "\\cfg\\Motd.txt").c_str(), "wb");
+	string sMotdPath = ServerManager::m_sPath + "\\cfg\\Motd.txt";
 #else
-	FILE * fw = fopen((ServerManager::m_sPath + "/cfg/Motd.txt").c_str(), "wb");
+	string sMotdPath = ServerManager::m_sPath + "/cfg/Motd.txt";
 #endif
+	char sMotdTmp[PATH_MAX];
+	FILE * fw = AtomicOpen(sMotdPath.c_str(), sMotdTmp, sizeof(sMotdTmp));
     if(fw != NULL) {
         if(m_ui16MOTDLen != 0) {
             fwrite(m_sMOTD, 1, (size_t)m_ui16MOTDLen, fw);
         }
-        fclose(fw);
+        AtomicCommit(fw, sMotdTmp, sMotdPath.c_str());
     }
 }
 //---------------------------------------------------------------------------
@@ -487,10 +489,12 @@ void SettingManager::Save() {
     SaveMOTD();
 
 #ifdef _WIN32
-    FILE * fSettingsFile = fopen((ServerManager::m_sPath + "\\cfg\\Settings.pxt").c_str(), "wb");
+	string sSetPath = ServerManager::m_sPath + "\\cfg\\Settings.pxt";
 #else
-	FILE * fSettingsFile = fopen((ServerManager::m_sPath + "/cfg/Settings.pxt").c_str(), "wb");
+	string sSetPath = ServerManager::m_sPath + "/cfg/Settings.pxt";
 #endif
+	char sSetTmp[PATH_MAX];
+	FILE * fSettingsFile = AtomicOpen(sSetPath.c_str(), sSetTmp, sizeof(sSetTmp));
     if(fSettingsFile == NULL) {
     	return;
     }
@@ -567,7 +571,7 @@ void SettingManager::Save() {
 		}
     }
 
-    fclose(fSettingsFile);
+	AtomicCommit(fSettingsFile, sSetTmp, sSetPath.c_str());
 }
 //---------------------------------------------------------------------------
 
@@ -1182,7 +1186,11 @@ void SettingManager::SetText(const size_t szTxtId, const char * sTxt, const size
 #ifdef _WIN32
             if(szLen != 0 && FileExist((ServerManager::m_sPath+"\\language\\"+string(sTxt, szLen)+".xml").c_str()) == false) {
 #else
-			if(szLen != 0 && FileExist((ServerManager::m_sPath + "/language/" + string(sTxt, szLen) + ".xml").c_str()) == false) {
+			if(szLen != 0 && FileExist((ServerManager::m_sPath + "/language/" + string(sTxt, szLen) + ".xml").c_str()) == false
+	#ifdef PTOKAX_DATADIR
+				&& FileExist((string(PTOKAX_DATADIR) + "/language/" + string(sTxt, szLen) + ".xml").c_str()) == false
+	#endif
+			) {
 #endif
                 return;
             }

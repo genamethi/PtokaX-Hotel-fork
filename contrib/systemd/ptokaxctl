@@ -1,0 +1,236 @@
+#!/bin/sh
+# Administrative front-end for PtokaX systemd instances.
+#
+# Privileged actions live here, run explicitly by an admin -- never in a make recipe.
+set -eu
+
+PTOKAX_BIN=${PTOKAX_BIN:-@bindir@/PtokaX}
+STATE_ROOT=${PTOKAX_STATE_ROOT:-/var/lib/ptokax}
+UNITDIR=${PTOKAX_UNITDIR:-/etc/systemd/system}
+TEMPLATEDIR=${PTOKAX_TEMPLATEDIR:-@datadir@/ptokax/systemd}
+SEEDDIR=${PTOKAX_SEEDDIR:-@datadir@/ptokax/cfg.example}
+
+self=${0##*/}
+
+die() { printf '%s: %s\n' "$self" "$*" >&2; exit 1; }
+need_root() { [ "$(id -u)" -eq 0 ] || die "must be run as root"; }
+
+check_instance() {
+	[ -n "${1:-}" ] || die "an instance name is required"
+	case $1 in
+	*[!A-Za-z0-9_]*) die "instance name may only contain letters, digits and underscore: $1" ;;
+	esac
+}
+
+# The state directory is only reachable as root when DynamicUser is in effect: systemd
+# places it under /var/lib/private, which is mode 0700.
+state_dir() { printf '%s/%s\n' "$STATE_ROOT" "$1"; }
+
+unit_of() { printf 'ptokax@%s.service\n' "$1"; }
+
+configured_ports() {
+	grep -hE '^[[:space:]]*TCPPorts[[:space:]]*=' "$STATE_ROOT"/*/cfg/Settings.pxt 2>/dev/null |
+		sed 's/.*=[[:space:]]*//' | tr ';' '\n' | tr -d ' \t\r'
+}
+
+port_taken() {
+	configured_ports | grep -qx "$1" && return 0
+	ss -ltnH "sport = :$1" 2>/dev/null | grep -q . && return 0
+	return 1
+}
+
+# 411 is the standard DC port, so the first hub on a host should get it
+pick_ports() {
+	if ! port_taken 411 && ! port_taken 1209; then
+		printf '1209;411\n'
+		return
+	fi
+
+	a=4111
+	while port_taken "$a"; do a=$((a + 1)); done
+	b=$((a + 1))
+	while port_taken "$b"; do b=$((b + 1)); done
+
+	printf '%s;%s\n' "$a" "$b"
+}
+
+is_active() { systemctl is-active --quiet "$(unit_of "$1")"; }
+
+usage() {
+	cat <<EOF
+Usage: $self <command> [args]
+
+  list                       instances known to systemd, with state
+  create <instance>          seed a state directory and run the setup menu
+  setup <instance>           run the PtokaX configuration menu (instance must be stopped)
+  check <instance>           validate an instance's configuration
+  start|stop|restart <instance>
+  status <instance>
+  enable|disable <instance>
+  log <instance> [-f]        journal for one instance
+  backup <instance> [file]   tar the instance state directory
+  unit show                  installed unit vs. the running systemd version
+  unit regenerate            re-render the unit for the running systemd
+
+Editing cfg/Settings.pxt while an instance is running loses the edit: the hub holds
+settings in memory and rewrites cfg/ on every stop. Use 'setup' with the hub stopped.
+EOF
+}
+
+systemd_version() { systemctl --version | awk 'NR==1 {print $2; exit}'; }
+
+cmd_list() {
+	systemctl list-units --all --no-legend --no-pager 'ptokax@*.service' 2>/dev/null |
+		awk '{printf "%-28s %-10s %s\n", $1, $3, $4}' ||
+		printf 'no ptokax instances found\n'
+}
+
+cmd_create() {
+	need_root
+	check_instance "${1:-}"
+	dir=$(state_dir "$1")
+	if [ -d "$dir/cfg" ]; then
+		die "instance $1 already has configuration at $dir"
+	fi
+	# Start once so systemd creates the state directory with the right ownership,
+	# then stop -- this is what makes the seed land as the service's identity rather
+	# than as root.
+	printf '%s: creating state directory for %s\n' "$self" "$1"
+	systemctl start "$(unit_of "$1")" || true
+	systemctl stop "$(unit_of "$1")" || true
+	if [ -d "$SEEDDIR" ] && [ -d "$dir" ]; then
+		mkdir -p "$dir/cfg"
+		for f in "$SEEDDIR"/*; do
+			[ -e "$f" ] || continue
+			[ -e "$dir/cfg/${f##*/}" ] || cp "$f" "$dir/cfg/"
+		done
+		chown -R --reference="$dir" "$dir/cfg" 2>/dev/null || true
+	fi
+
+	if [ -f "$dir/cfg/Settings.pxt" ] && ! grep -qE '^[[:space:]]*TCPPorts[[:space:]]*=' "$dir/cfg/Settings.pxt"; then
+		ports=$(pick_ports)
+		printf 'TCPPorts\t=\t%s\n' "$ports" >> "$dir/cfg/Settings.pxt"
+		chown --reference="$dir" "$dir/cfg/Settings.pxt" 2>/dev/null || true
+		printf '%s: assigned ports %s\n' "$self" "$ports"
+
+		case $ports in
+		*411*) ;;
+		*) printf '%s: 411 is already in use on this host; only one hub per address can have it\n' "$self" ;;
+		esac
+	fi
+
+	printf '%s: seeded %s -- now run: %s setup %s\n' "$self" "$dir" "$self" "$1"
+}
+
+cmd_setup() {
+	need_root
+	check_instance "${1:-}"
+	# -m writes cfg/Settings.pxt, and a running hub rewrites that same file on stop.
+	# Running both at once silently discards whichever finishes first.
+	if is_active "$1"; then
+		die "instance $1 is running; stop it before running setup or your changes will be lost"
+	fi
+	dir=$(state_dir "$1")
+	[ -d "$dir" ] || die "no state directory at $dir -- run '$self create $1' first"
+	systemd-run --pty --quiet --collect \
+		--unit="ptokax-setup-$1" \
+		--property="User=ptokax-$1" \
+		--property="DynamicUser=yes" \
+		--property="StateDirectory=ptokax/$1" \
+		--property="WorkingDirectory=/var/lib/ptokax/$1" \
+		"$PTOKAX_BIN" -c "/var/lib/ptokax/$1" -m
+}
+
+cmd_check() {
+	check_instance "${1:-}"
+	dir=$(state_dir "$1")
+	[ -d "$dir" ] || die "no state directory at $dir"
+
+	printf 'state      %s\n' "$dir"
+	printf 'unit       %s, %s\n' \
+		"$(systemctl is-enabled "$(unit_of "$1")" 2>/dev/null || echo 'not enabled')" \
+		"$(systemctl is-active "$(unit_of "$1")" 2>/dev/null || echo inactive)"
+
+	want=$(grep -hE '^[[:space:]]*TCPPorts[[:space:]]*=' "$dir/cfg/Settings.pxt" 2>/dev/null |
+		sed 's/.*=[[:space:]]*//' | tr -d ' \t\r')
+	printf 'ports      %s\n' "${want:-<default 1209;411>}"
+
+	# what the hub actually bound; a difference here is the usual cause of a hub
+	# that looks healthy but is unreachable
+	printf 'listening  %s\n' "$(systemctl show "$(unit_of "$1")" -p StatusText --value 2>/dev/null)"
+
+	for p in $(printf '%s' "${want:-1209;411}" | tr ';' ' '); do
+		if ! is_active "$1" && ss -ltnH "sport = :$p" 2>/dev/null | grep -q .; then
+			printf 'conflict   port %s is already in use by something else\n' "$p"
+		fi
+	done
+}
+
+cmd_log() {
+	check_instance "${1:-}"
+	inst=$1; shift
+	exec journalctl "PTOKAX_INSTANCE=$inst" "$@"
+}
+
+cmd_backup() {
+	need_root
+	check_instance "${1:-}"
+	dir=$(state_dir "$1")
+	out=${2:-ptokax-$1-backup.tar.gz}
+	[ -d "$dir" ] || die "no state directory at $dir"
+	is_active "$1" && printf '%s: warning: %s is running; cfg/ is rewritten on stop\n' "$self" "$1" >&2
+	tar -czf "$out" -C "$dir" .
+	printf '%s: wrote %s\n' "$self" "$out"
+}
+
+cmd_unit() {
+	case ${1:-show} in
+	show)
+		v=$(systemd_version)
+		printf 'running systemd: %s\n' "$v"
+		if [ -f "$UNITDIR/ptokax@.service" ]; then
+			printf 'installed unit:  %s\n' "$UNITDIR/ptokax@.service"
+			head -n 3 "$UNITDIR/ptokax@.service" | grep -i 'generated for systemd' ||
+				printf '  (no generation stamp)\n'
+		else
+			printf 'installed unit:  none in %s\n' "$UNITDIR"
+		fi
+		;;
+	regenerate)
+		need_root
+		v=$(systemd_version)
+		[ -f "$TEMPLATEDIR/ptokax@.service.in" ] ||
+			die "no template at $TEMPLATEDIR/ptokax@.service.in"
+		"$TEMPLATEDIR/unitgen.sh" --systemd-version="$v" \
+			--define=bindir="${PTOKAX_BIN%/*}" \
+			--define=sysconfdir=/etc \
+			--define=docdir=@docdir@ \
+			< "$TEMPLATEDIR/ptokax@.service.in" > "$UNITDIR/ptokax@.service.tmp"
+		printf '# generated for systemd %s\n' "$v" |
+			cat - "$UNITDIR/ptokax@.service.tmp" > "$UNITDIR/ptokax@.service"
+		rm -f "$UNITDIR/ptokax@.service.tmp"
+		systemctl daemon-reload
+		printf '%s: regenerated %s for systemd %s\n' "$self" "$UNITDIR/ptokax@.service" "$v"
+		;;
+	*) die "unknown 'unit' subcommand: $1" ;;
+	esac
+}
+
+[ $# -ge 1 ] || { usage; exit 2; }
+cmd=$1; shift
+
+case $cmd in
+list)              cmd_list "$@" ;;
+create)            cmd_create "$@" ;;
+setup)             cmd_setup "$@" ;;
+check)             cmd_check "$@" ;;
+log)               cmd_log "$@" ;;
+backup)            cmd_backup "$@" ;;
+unit)              cmd_unit "$@" ;;
+start|stop|restart|status|enable|disable)
+	check_instance "${1:-}"
+	exec systemctl "$cmd" "$(unit_of "$1")"
+	;;
+-h|--help|help)    usage ;;
+*)                 printf '%s: unknown command %s\n' "$self" "$cmd" >&2; usage; exit 2 ;;
+esac

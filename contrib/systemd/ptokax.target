@@ -1,0 +1,6 @@
+[Unit]
+Description=All PtokaX hub instances
+Documentation=file:/usr/share/doc/ptokax/README.systemd
+
+[Install]
+WantedBy=multi-user.target

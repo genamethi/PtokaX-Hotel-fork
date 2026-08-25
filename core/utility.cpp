@@ -24,6 +24,7 @@
 //---------------------------------------------------------------------------
 #include "hashBanManager.h"
 #include "LanguageManager.h"
+#include "logging.h"
 #include "ServerManager.h"
 #include "SettingManager.h"
 #include "UdpDebug.h"
@@ -873,37 +874,83 @@ bool HaveOnlyNumbers(char *sData, const uint16_t ui16Len) {
 }
 //---------------------------------------------------------------------------
 
-void AppendLog(const char * sData, const bool bScript/* == false*/) {
-	FILE * fw;
-
-	if(bScript == false) {
-#ifdef _WIN32
-        fw = fopen((ServerManager::m_sPath + "\\logs\\system.log").c_str(), "a");
-#else
-		fw = fopen((ServerManager::m_sPath + "/logs/system.log").c_str(), "a");
-#endif
-    } else {
-#ifdef _WIN32
-        fw = fopen((ServerManager::m_sPath + "\\logs\\script.log").c_str(), "a");
-#else
-		fw = fopen((ServerManager::m_sPath + "/logs/script.log").c_str(), "a");
-#endif
-    }
-
-	if(fw != NULL) {
-	   time_t acc_time;
-	   time(&acc_time);
-
-	   struct tm * acc_tm;
-	   acc_tm = localtime(&acc_time);
-
-	   char sBuf[64];
-	   strftime(sBuf, 64, "%c", acc_tm);
-
-	   fprintf(fw, "%s - %s\n", sBuf, sData);
-
-	   fclose(fw);
+FILE * AtomicOpen(const char * sPath, char * sTmpPath, const size_t szTmpSize) {
+	if(snprintf(sTmpPath, szTmpSize, "%s.tmp-%ld", sPath, (long)getpid()) >= (int)szTmpSize) {
+		return NULL;
 	}
+
+	return fopen(sTmpPath, "wb");
+}
+//---------------------------------------------------------------------------
+
+bool AtomicCommit(FILE * fw, const char * sTmpPath, const char * sPath) {
+	if(fw == NULL) {
+		return false;
+	}
+
+	if(fflush(fw) != 0) {
+		AtomicAbort(fw, sTmpPath);
+		return false;
+	}
+
+#ifndef _WIN32
+	if(fsync(fileno(fw)) != 0) {
+		AtomicAbort(fw, sTmpPath);
+		return false;
+	}
+#endif
+
+	if(fclose(fw) != 0) {
+		unlink(sTmpPath);
+		return false;
+	}
+
+	char sBakPath[PATH_MAX];
+	if(snprintf(sBakPath, sizeof(sBakPath), "%s.bak", sPath) < (int)sizeof(sBakPath)) {
+		rename(sPath, sBakPath);
+	}
+
+	if(rename(sTmpPath, sPath) != 0) {
+		LogEmitFormat(PX_LOG_ERR, PX_SUB_HUB, "Cannot rename %s to %s: %s", sTmpPath, sPath, strerror(errno));
+		unlink(sTmpPath);
+		return false;
+	}
+
+#ifndef _WIN32
+	// the rename is only durable once the directory entry is flushed
+	char sDir[PATH_MAX];
+	size_t szLen = strlen(sPath);
+	while(szLen > 0 && sPath[szLen - 1] != '/') {
+		szLen--;
+	}
+
+	if(szLen > 1 && szLen < sizeof(sDir)) {
+		memcpy(sDir, sPath, szLen - 1);
+		sDir[szLen - 1] = '\0';
+
+		int iDir = open(sDir, O_RDONLY);
+		if(iDir != -1) {
+			fsync(iDir);
+			close(iDir);
+		}
+	}
+#endif
+
+	return true;
+}
+//---------------------------------------------------------------------------
+
+void AtomicAbort(FILE * fw, const char * sTmpPath) {
+	if(fw != NULL) {
+		fclose(fw);
+	}
+
+	unlink(sTmpPath);
+}
+//---------------------------------------------------------------------------
+
+void AppendLog(const char * sData, const bool bScript/* == false*/, const int iPriority/* == PX_LOG_NOTICE*/) {
+	LogEmit(iPriority, bScript == true ? PX_SUB_SCRIPT : PX_SUB_HUB, sData);
 
     if(UdpDebug::m_Ptr != NULL && bScript == false) {
 		UdpDebug::m_Ptr->BroadcastFormat("[LOG] %s", sData);
@@ -912,59 +959,36 @@ void AppendLog(const char * sData, const bool bScript/* == false*/) {
 //---------------------------------------------------------------------------
 
 void AppendDebugLog(const char * sData) {
-#ifdef _WIN32
-	FILE * fw = fopen((ServerManager::m_sPath + "\\logs\\debug.log").c_str(), "a");
-#else
-	FILE * fw = fopen((ServerManager::m_sPath + "/logs/debug.log").c_str(), "a");
-#endif
-
-	if(fw == NULL) {
+	if(sData == NULL) {
 		return;
 	}
 
-	time_t acc_time;
-	time(&acc_time);
+	// callers pass "%s - xxx\n" - the message was its own format string
+	const char * sMsg = sData;
 
-	struct tm * acc_tm;
-	acc_tm = localtime(&acc_time);
+	if(strncmp(sMsg, "%s - ", 5) == 0) {
+		sMsg += 5;
+	} else if(strncmp(sMsg, "%s ", 3) == 0) {
+		sMsg += 3;
+	}
 
-	char sBuf[64];
-	strftime(sBuf, 64, "%c", acc_tm);
-
-    fprintf(fw, sData, sBuf); // "%s - xxx\n"
-
-	fclose(fw);
+	LogEmitNoAlloc(PX_LOG_ERR, PX_SUB_DEBUG, sMsg);
 }
 //---------------------------------------------------------------------------
 
 void AppendDebugLogFormat(const char * sFormatMsg, ...) {
-#ifdef _WIN32
-	FILE * fw = fopen((ServerManager::m_sPath + "\\logs\\debug.log").c_str(), "a");
-#else
-	FILE * fw = fopen((ServerManager::m_sPath + "/logs/debug.log").c_str(), "a");
-#endif
-
-	if(fw == NULL) {
-		return;
-	}
-
-	time_t tmAccTime;
-	time(&tmAccTime);
-
-	size_t szLen = strftime(ServerManager::m_pGlobalBuffer, ServerManager::m_szGlobalBufferSize, "%c - ", localtime(&tmAccTime));
-
-	if(szLen != 0) {
-		fwrite(ServerManager::m_pGlobalBuffer, 1, szLen, fw);
-	}
+	char sBuf[4096];
 
 	va_list vlArgs;
 	va_start(vlArgs, sFormatMsg);
-
-	vfprintf(fw, sFormatMsg, vlArgs);
-
+	const int iLen = vsnprintf(sBuf, sizeof(sBuf), sFormatMsg, vlArgs);
 	va_end(vlArgs);
 
-	fclose(fw);
+	if(iLen <= 0) {
+		return;
+	}
+
+	LogEmit(PX_LOG_ERR, PX_SUB_DEBUG, sBuf);
 }
 //---------------------------------------------------------------------------
 #ifdef _WIN32

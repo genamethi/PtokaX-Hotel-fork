@@ -1,0 +1,19 @@
+# Trade the transient UID for group access to the state directory.
+#
+# Install as /etc/systemd/system/ptokax@<instance>.service.d/10-group-access.conf
+# and create the matching static user first:
+#
+#   /usr/lib/sysusers.d/ptokax-<instance>.conf:
+#       u ptokax-<instance> - "PtokaX DC hub" /var/lib/ptokax/<instance> -
+#   systemd-sysusers && systemctl daemon-reload
+#
+# Then add yourself to the ptokax-<instance> group.
+#
+# Without this, DynamicUser=yes places the state directory under /var/lib/private,
+# which is mode 0700 root -- every edit needs sudo regardless of group membership.
+# Turning DynamicUser off moves it back to /var/lib/ptokax/<instance>.
+
+[Service]
+DynamicUser=no
+StateDirectoryMode=0750
+UMask=0027

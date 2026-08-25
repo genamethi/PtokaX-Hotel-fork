@@ -25,6 +25,9 @@ class PXBReader {
 private:
 	FILE * m_pFile;
 
+	char m_sSavePath[PATH_MAX];
+	char m_sTmpPath[PATH_MAX];
+
     char * m_pActualPosition;
 
     size_t m_szRemainingSize;

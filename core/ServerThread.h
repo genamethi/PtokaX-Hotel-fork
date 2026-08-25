@@ -58,7 +58,7 @@ private:
 
     int m_iAdressFamily;
 
-	bool m_bTerminated;
+	bool m_bTerminated, m_bInheritedSck;
 
 	ServerThread(const ServerThread&);
 	const ServerThread& operator=(const ServerThread&);
