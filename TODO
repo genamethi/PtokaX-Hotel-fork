@@ -1,5 +1,0 @@
-Work on systemd and openrc inits.
-We severely need better journaling and admin access.
-
-Binding ports need to be decoupled from the advertised port.
-
