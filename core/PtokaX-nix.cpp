@@ -35,10 +35,16 @@
 static bool bTerminatedBySignal = false;
 static int iSignal = 0;
 static volatile sig_atomic_t bReloadRequested = 0;
+static volatile sig_atomic_t bReopenRequested = 0;
 //---------------------------------------------------------------------------
 
 static void ReloadSigHandler(int /*iSig*/) {
 	bReloadRequested = 1;
+}
+//---------------------------------------------------------------------------
+
+static void ReopenSigHandler(int /*iSig*/) {
+	bReopenRequested = 1;
 }
 //---------------------------------------------------------------------------
 
@@ -131,6 +137,8 @@ int main(int argc, char* argv[]) {
 		
 		ServerManager::FinalClose();
 
+		LogClose();
+
 		return EXIT_SUCCESS;
 	}
 
@@ -172,10 +180,21 @@ int main(int argc, char* argv[]) {
 	    exit(EXIT_FAILURE);
 	}
 
+	struct sigaction sigreopen;
+	sigreopen.sa_handler = ReopenSigHandler;
+	sigemptyset(&sigreopen.sa_mask);
+	sigreopen.sa_flags = SA_RESTART;
+
+	if(sigaction(SIGUSR1, &sigreopen, NULL) == -1) {
+	    AppendDebugLog("%s - [ERR] Cannot create sigaction SIGUSR1 in main\n");
+	    exit(EXIT_FAILURE);
+	}
+
 	ServerManager::Initialize();
 
 	if(ServerManager::Start() == false) {
 		LogEmit(PX_LOG_ERR, PX_SUB_HUB, "Server start failed!");
+		LogClose();
 		return EXIT_FAILURE;
 	}
 
@@ -235,13 +254,19 @@ int main(int argc, char* argv[]) {
 			struct timespec tsNow;
 			clock_gettime(CLOCK_MONOTONIC, &tsNow);
 			PxNotifyFormat("RELOADING=1\nMONOTONIC_USEC=%" PRIu64,
-				(uint64_t)tsNow.tv_sec * 1000000ULL + (uint64_t)(tsNow.tv_nsec / 1000));
+				(uint64_t)((uint64_t)tsNow.tv_sec * 1000000ULL + (uint64_t)(tsNow.tv_nsec / 1000)));
 
 			ScriptManager::m_Ptr->Restart();
 
 			LogEmit(PX_LOG_NOTICE, PX_SUB_HUB, "Scripts restarted");
 
 			PxNotify("READY=1");
+		}
+
+		if(bReopenRequested != 0) {
+			bReopenRequested = 0;
+
+			LogReopenFiles();
 		}
 
 	    if(bTerminatedBySignal == true) {
@@ -287,6 +312,8 @@ int main(int argc, char* argv[]) {
 	}
 
 	LogEmitFormat(PX_LOG_INFO, PX_SUB_HUB, "%s ending", g_sPtokaXTitle);
+
+	LogClose();
 
     return EXIT_SUCCESS;
 }

@@ -19,6 +19,10 @@ When no config dir is specified the current directory is used.
 If it does not start, check the journal, or the logs directory when not running under
 a service manager.
 
+Signals:
+SIGHUP				- restart the scripts.
+SIGUSR1				- reopen the files in the logs directory, for use after a rotation.
+
 Homepage: http://www.PtokaX.org
 
 PtokaX Forum: http://forum.PtokaX.org

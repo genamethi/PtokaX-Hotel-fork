@@ -594,9 +594,7 @@ bool ScriptStart(Script * pScript) {
 
 		UdpDebug::m_Ptr->BroadcastFormat("[LUA] %s", sMsg.c_str());
 
-        if(SettingManager::m_Ptr->m_bBools[SETBOOL_LOG_SCRIPT_ERRORS] == true) {
-            LogEmitField(PX_LOG_ERR, PX_SUB_SCRIPT, "PTOKAX_SCRIPT", pScript->m_sName, sMsg.c_str());
-        }
+        LogEmitField(PX_LOG_ERR, PX_SUB_SCRIPT, "PTOKAX_SCRIPT", pScript->m_sName, sMsg.c_str());
 
 		lua_close(pScript->m_pLua);
 		pScript->m_pLua = NULL;
@@ -761,9 +759,7 @@ static bool ScriptOnError(Script * pScript, char * sErrorMsg, const size_t szMsg
 			string(LanguageManager::m_Ptr->m_sTexts[LAN_SCRIPT_STOPPED], (size_t)LanguageManager::m_Ptr->m_ui16TextsLens[LAN_SCRIPT_STOPPED]) + "!").c_str());
 #endif
 
-		if(SettingManager::m_Ptr->m_bBools[SETBOOL_LOG_SCRIPT_ERRORS] == true) {
-			LogEmitField(PX_LOG_ERR, PX_SUB_SCRIPT, "PTOKAX_SCRIPT", pScript->m_sName, sMsg.c_str());
-		}
+		LogEmitField(PX_LOG_ERR, PX_SUB_SCRIPT, "PTOKAX_SCRIPT", pScript->m_sName, sMsg.c_str());
 
         lua_settop(pScript->m_pLua, 0);
         return false;
@@ -1177,9 +1173,7 @@ void ScriptError(Script * pScript) {
 
 	UdpDebug::m_Ptr->BroadcastFormat("[LUA] %s", sMsg.c_str());
 
-    if(SettingManager::m_Ptr->m_bBools[SETBOOL_LOG_SCRIPT_ERRORS] == true) {
-        LogEmitField(PX_LOG_ERR, PX_SUB_SCRIPT, "PTOKAX_SCRIPT", pScript->m_sName, sMsg.c_str());
-    }
+    LogEmitField(PX_LOG_ERR, PX_SUB_SCRIPT, "PTOKAX_SCRIPT", pScript->m_sName, sMsg.c_str());
 
 	if((((pScript->m_ui16Functions & Script::ONERROR) == Script::ONERROR) == true && ScriptOnError(pScript, stmp, szLen) == false) ||
         SettingManager::m_Ptr->m_bBools[SETBOOL_STOP_SCRIPT_ON_ERROR] == true) {

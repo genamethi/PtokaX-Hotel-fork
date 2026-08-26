@@ -45,6 +45,8 @@ static const char * g_sStreamFile[PX_STREAM_COUNT] = {
 };
 
 static int g_iJournal = -1;
+
+static void WriteStderr(const int iPriority, const char * sSubsystem, const char * sMsg);
 //---------------------------------------------------------------------------
 
 static bool UsingJournal() {
@@ -92,12 +94,23 @@ static FILE * FileFor(const LogStream eStream) {
 		return NULL;
 	}
 
-	g_pFiles[eStream] = fopen((ServerManager::m_sPath + PX_DIRSEP + g_sStreamFile[eStream]).c_str(), "a");
+	// the [MEM] callers reach this under allocation failure, so no string concat here
+	char sPath[PATH_MAX];
+	if(snprintf(sPath, sizeof(sPath), "%s" PX_DIRSEP "%s", ServerManager::m_sPath.c_str(),
+		g_sStreamFile[eStream]) >= (int)sizeof(sPath)) {
+		g_bOpenFailed[eStream] = true;
+		return NULL;
+	}
+
+	g_pFiles[eStream] = fopen(sPath, "a");
 
 	if(g_pFiles[eStream] == NULL) {
 		g_bOpenFailed[eStream] = true;
-		fprintf(stderr, "<%d>hub: cannot open %s: %s\n", PX_LOG_WARNING,
-			g_sStreamFile[eStream], strerror(errno));
+
+		char sErr[256];
+		snprintf(sErr, sizeof(sErr), "cannot open %s: %s", g_sStreamFile[eStream], strerror(errno));
+		WriteStderr(PX_LOG_WARNING, PX_SUB_HUB, sErr);
+
 		return NULL;
 	}
 
@@ -109,7 +122,14 @@ static void FormatTime(char * sBuf, const size_t szSize) {
 	time_t tmNow;
 	time(&tmNow);
 
-	if(strftime(sBuf, szSize, "%Y-%m-%dT%H:%M:%S%z", localtime(&tmNow)) == 0) {
+#ifdef _WIN32
+	struct tm * ptmLocal = localtime(&tmNow);
+#else
+	struct tm tmLocal;
+	struct tm * ptmLocal = localtime_r(&tmNow, &tmLocal);
+#endif
+
+	if(ptmLocal == NULL || strftime(sBuf, szSize, "%Y-%m-%dT%H:%M:%S%z", ptmLocal) == 0) {
 		sBuf[0] = '\0';
 	}
 }
@@ -154,7 +174,20 @@ static void WriteFile(const int iPriority, const char * sSubsystem, const char *
 	char sTime[32];
 	FormatTime(sTime, sizeof(sTime));
 
-	fprintf(fw, "%s [%d] %s\n", sTime, iPriority, sMsg);
+	// stamp every line, a continuation line without one cannot be parsed back out
+	const char * sLine = sMsg;
+
+	while(sLine != NULL && *sLine != '\0') {
+		const char * sEnd = strchr(sLine, '\n');
+		const int iLen = (sEnd != NULL) ? (int)(sEnd - sLine) : (int)strlen(sLine);
+
+		if(iLen > 0) {
+			fprintf(fw, "%s [%d] %.*s\n", sTime, iPriority, iLen, sLine);
+		}
+
+		sLine = (sEnd != NULL) ? sEnd + 1 : NULL;
+	}
+
 	fflush(fw);
 }
 //---------------------------------------------------------------------------
@@ -196,14 +229,37 @@ void LogEmitNoAlloc(const int iPriority, const char * sSubsystem, const char * s
 
 void LogEmitField(const int iPriority, const char * sSubsystem, const char * sField,
 	const char * sValue, const char * sMsg) {
-	if(PxJournalSend(iPriority, sSubsystem, sMsg, sField, sValue) == true) {
-		pthread_mutex_lock(&g_mtxLog);
-		WriteFile(iPriority, sSubsystem, sMsg);
-		pthread_mutex_unlock(&g_mtxLog);
+	if(sMsg == NULL || *sMsg == '\0') {
 		return;
 	}
 
-	LogEmitFormat(iPriority, sSubsystem, "%s [%s]", sMsg, sValue != NULL ? sValue : "");
+	// the file sink has no fields, so the value goes into the text
+	char sBuf[PX_LOG_BUFSIZE];
+	if(snprintf(sBuf, sizeof(sBuf), "%s: %s", sValue != NULL ? sValue : "?", sMsg) <= 0) {
+		return;
+	}
+
+	size_t szLen = strlen(sBuf);
+	while(szLen > 0 && (sBuf[szLen - 1] == '\n' || sBuf[szLen - 1] == '\r')) {
+		sBuf[--szLen] = '\0';
+	}
+
+	if(szLen == 0) {
+		return;
+	}
+
+	pthread_mutex_lock(&g_mtxLog);
+
+	// the socket exists on any systemd host, so its presence is not the test
+	// JournalSocket() caches its probe, so the send is under the same lock
+	if(UsingJournal() == false ||
+		PxJournalSend(iPriority, sSubsystem, sMsg, sField, sValue) == false) {
+		WriteStderr(iPriority, sSubsystem, sBuf);
+	}
+
+	WriteFile(iPriority, sSubsystem, sBuf);
+
+	pthread_mutex_unlock(&g_mtxLog);
 }
 //---------------------------------------------------------------------------
 
