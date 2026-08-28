@@ -124,6 +124,14 @@ const char g_sPtokaXTitle[] = "PtokaX DC Hub " PtokaXVersionString
     #define strcasecmp stricmp
     #define strncasecmp strnicmp
 #endif
+
+#ifdef _WIN32
+	#define PX_DIRSEP "\\"
+	#define PX_LUA_CEXT ".dll"
+#else
+	#define PX_DIRSEP "/"
+	#define PX_LUA_CEXT ".so"
+#endif
 //---------------------------------------------------------------------------
 
 #endif

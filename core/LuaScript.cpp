@@ -484,6 +484,50 @@ static void AddPermissionsIds(lua_State * pLua) {
 }
 //------------------------------------------------------------------------------
 
+static void AddScriptPaths(lua_State * pLua) {
+	lua_getglobal(pLua, "package");
+
+	if(lua_istable(pLua, -1) == 0) {
+		lua_pop(pLua, 1);
+		return;
+	}
+
+	const char * sDir = ServerManager::m_sScriptPath.c_str();
+
+	// Lua resolves ./ against the working directory, which is the config directory,
+	// so scripts/ is never searched and require of a sibling module fails. Hub paths
+	// go first, so a script's own copy of a module wins over a system-wide one.
+	lua_pushfstring(pLua, "%s?.lua;%s?" PX_DIRSEP "init.lua;"
+		"%slibs" PX_DIRSEP "?.lua;%slibs" PX_DIRSEP "?" PX_DIRSEP "init.lua;",
+		sDir, sDir, sDir, sDir);
+
+	lua_getfield(pLua, -2, "path");
+
+	if(lua_isstring(pLua, -1) == 0) {
+		lua_pop(pLua, 1);
+		lua_pushliteral(pLua, "");
+	}
+
+	lua_concat(pLua, 2);
+	lua_setfield(pLua, -2, "path");
+
+	lua_pushfstring(pLua, "%s?" PX_LUA_CEXT ";%slibs" PX_DIRSEP "?" PX_LUA_CEXT ";",
+		sDir, sDir);
+
+	lua_getfield(pLua, -2, "cpath");
+
+	if(lua_isstring(pLua, -1) == 0) {
+		lua_pop(pLua, 1);
+		lua_pushliteral(pLua, "");
+	}
+
+	lua_concat(pLua, 2);
+	lua_setfield(pLua, -2, "cpath");
+
+	lua_pop(pLua, 1);
+}
+//------------------------------------------------------------------------------
+
 bool ScriptStart(Script * pScript) {
 	pScript->m_ui16Functions = 65535;
 	pScript->m_ui32DataArrivals = 4294967295U;
@@ -506,6 +550,8 @@ bool ScriptStart(Script * pScript) {
     }
 
 	luaL_openlibs(pScript->m_pLua);
+
+	AddScriptPaths(pScript->m_pLua);
 
 	lua_atpanic(pScript->m_pLua, ScriptPanic);
 

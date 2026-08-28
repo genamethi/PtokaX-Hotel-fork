@@ -26,12 +26,6 @@
 
 static const size_t PX_LOG_BUFSIZE = 4096;
 
-#ifdef _WIN32
-	#define PX_DIRSEP "\\"
-#else
-	#define PX_DIRSEP "/"
-#endif
-
 enum LogStream { PX_STREAM_SYSTEM, PX_STREAM_SCRIPT, PX_STREAM_DEBUG, PX_STREAM_COUNT };
 
 static pthread_mutex_t g_mtxLog = PTHREAD_MUTEX_INITIALIZER;
