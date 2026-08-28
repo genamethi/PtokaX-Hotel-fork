@@ -33,6 +33,7 @@ check_instance() {
 # The state directory is only reachable as root when DynamicUser is in effect: systemd
 # places it under /var/lib/private, which is mode 0700.
 state_dir() { printf '%s/%s\n' "$STATE_ROOT" "$1"; }
+real_dir() { readlink -f "$1" 2>/dev/null || printf '%s\n' "$1"; }
 
 unit_of() { printf 'ptokax@%s.service\n' "$1"; }
 
@@ -181,7 +182,7 @@ assign_ports() {
 
 import_tree() {
 	have_prog rsync || die "rsync is required to import"
-	dir=$(state_dir "$1")
+	dir=$(real_dir "$(state_dir "$1")")
 	rsync -a \
 		--filter='- .git' \
 		--filter='+ /cfg/' --filter='+ /cfg/**' \
@@ -345,7 +346,7 @@ sync_run() {
 
 	syncdir=$(syncdir_of "$hub")
 	[ -d "$syncdir" ] || die "syncdir does not exist: $syncdir"
-	statedir=$(state_dir "$hub")
+	statedir=$(real_dir "$(state_dir "$hub")")
 	[ -d "$statedir" ] || die "no state directory at $statedir -- run '$self create $hub' first"
 
 	mf=$(manifest_file "$hub")
