@@ -37,8 +37,7 @@ systemd creates the tree, so it is not there until create or import has run.
 	sudo ptokaxctl get PXdev statedir
 
 By default the tree sits under /var/lib/private at 0700 root and needs sudo to
-reach. See "Identity". Rather than copying into it by hand, register a workspace
-and push. See "Working on scripts".
+reach. See "Identity". "Working on scripts" covers editing them without it.
 
 
 ptokaxctl
@@ -48,7 +47,7 @@ ptokaxctl
 	create <hub> --from DIR		new tree from an existing config dir
 	create <hub> --setup		as above, then straight into PtokaX -m
 	import <hub> <configdir>	into a hub that already exists
-	set <hub> syncdir <path>	register a workspace
+	set <hub> syncdir <path>	where push and pull read and write
 	get <hub> syncdir|statedir	print a setting or the tree
 	push <hub> / pull <hub>		move scripts/ and texts/ either way
 	check <hub>			configured ports against what is listening
@@ -65,8 +64,9 @@ import copies your settings untouched, TCPPorts included.
 Working on scripts
 ------------------
 
-Keep a workspace you own, test against it with PtokaX -c, and push when it is
-ready. Only scripts/ and texts/ move. cfg/ never does, for the reason above.
+Editing scripts in the hub's tree needs sudo for every change. Keep them
+somewhere you own instead and copy them across in one command. Only scripts/ and
+texts/ move. cfg/ never does, for the reason above.
 
 	sudo ptokaxctl set PXdev syncdir ~/.local/share/dchubs/PXdev
 	ptokaxctl push PXdev --dry-run
@@ -74,24 +74,10 @@ ready. Only scripts/ and texts/ move. cfg/ never does, for the reason above.
 
 Both directions need root, because the tree does. --dry-run does not.
 
-A live hub writes its own data files, and those hold real state that outranks
-anything in your workspace. push tracks what the two sides last agreed on, so a
-file only you changed goes over without asking, a file the hub changed stops and
-asks, and No is the default. pull is the same in reverse. --force skips the
-asking.
-
-scripts/ syncs recursively, so libs/ and data/ come with it. texts/ does not,
-because the hub reads that directory one level deep and cannot see into a
-subdirectory.
-
-<syncdir>/.pxignore keeps things out of the diff, one rsync exclude pattern per
-line, paths as you see them:
-
-	scripts/data/*.tbl
-	scripts/cache/
-
-A pushed script arrives disabled, since the hub adds scripts it has not seen
-that way. Enable it with reload-scripts, or startscript from an op client.
+To avoid overwriting production data, ptokaxctl records what was last pushed, and
+prompts before overwriting anything the hub has changed since then. pull is the
+reverse. --force skips the prompting. .pxignore in the syncdir keeps files out of
+the diff entirely.
 
 
 Logging
@@ -138,5 +124,5 @@ address and turn on bind only single IP.
 	ip -6 addr add 2001:db8:1::10/64 dev eth0
 
 The bound address comes from resolving HubAddress, so this holds when the
-address you hand out is the one you bind. Behind NAT it is not, and socket
+address you provide is the one you bind. Behind NAT it is not, and socket
 activation covers that instead. README.systemd.
