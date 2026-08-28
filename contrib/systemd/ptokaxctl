@@ -180,14 +180,22 @@ assign_ports() {
 }
 
 import_tree() {
+	have_prog rsync || die "rsync is required to import"
 	dir=$(state_dir "$1")
+	rsync -a \
+		--filter='- .git' \
+		--filter='+ /cfg/' --filter='+ /cfg/**' \
+		--filter='+ /scripts/' --filter='+ /scripts/**' \
+		--filter='+ /texts/' --filter='+ /texts/**' \
+		--filter='+ /language/' --filter='+ /language/**' \
+		--filter='- *' \
+		"$2/" "$dir/" || die "rsync failed while importing $2"
 	for sub in cfg scripts texts language; do
-		[ -d "$2/$sub" ] || continue
-		mkdir -p "$dir/$sub"
-		cp -r "$2/$sub/." "$dir/$sub/"
-		printf '%s: imported %s\n' "$self" "$sub"
+		if [ -d "$2/$sub" ]; then
+			printf '%s: imported %s\n' "$self" "$sub"
+		fi
 	done
-	chown -R --reference="$dir" "$dir" 2>/dev/null || true
+	chown -R --reference="$dir" "$dir" 2>/dev/null || :
 }
 
 ctl_file() { printf '%s/%s.ctl\n' "$CONFDIR" "$1"; }
