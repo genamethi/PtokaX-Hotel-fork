@@ -9,11 +9,19 @@ STATE_ROOT=${PTOKAX_STATE_ROOT:-/var/lib/ptokax}
 UNITDIR=${PTOKAX_UNITDIR:-/etc/systemd/system}
 TEMPLATEDIR=${PTOKAX_TEMPLATEDIR:-@datadir@/ptokax/systemd}
 SEEDDIR=${PTOKAX_SEEDDIR:-@datadir@/ptokax/cfg.example}
+CONFDIR=${PTOKAX_CONFDIR:-@sysconfdir@/ptokax}
+CTL_STATE=${PTOKAX_CTL_STATE:-/var/lib/ptokaxctl}
+
+# what push/pull will carry. scripts/ recurses because libs/ is on package.path and
+# dofile reaches anywhere below it; texts/ does not, because the hub reads that
+# directory with a single non-recursive pass and cannot see into a subdirectory.
+SYNC_SUBS='scripts texts'
 
 self=${0##*/}
 
 die() { printf '%s: %s\n' "$self" "$*" >&2; exit 1; }
 need_root() { [ "$(id -u)" -eq 0 ] || die "must be run as root"; }
+have_prog() { command -v "$1" >/dev/null 2>&1; }
 
 check_instance() {
 	[ -n "${1:-}" ] || die "an instance name is required"
@@ -76,7 +84,11 @@ Usage: $self <command> [args]
   create <hub> [--from DIR] [--setup]
                              new hub, optionally from an existing config dir
   import <hub> <configdir>   bring an existing PtokaX config directory in
-  path <hub>                 print the state directory
+  set <hub> syncdir <path>   register a workspace to sync from
+  get <hub> syncdir|statedir print a setting or the state directory
+  push <hub> [--dry-run] [--force]
+  pull <hub> [--dry-run] [--force]
+                             move scripts/ and texts/ between workspace and hub
   setup <hub>                run the PtokaX configuration menu, hub must be stopped
   check <hub>                configured ports against what is listening
   reload-scripts <hub>       restart the hub's scripts
@@ -89,7 +101,8 @@ Usage: $self <command> [args]
   unit regenerate            re-render the unit for the running systemd
 
 cfg/ is rewritten on shutdown, so an edit made while the hub runs is lost. Use
-setup with the hub stopped.
+setup with the hub stopped. push and pull carry scripts/ and texts/ only, for
+the same reason.
 EOF
 }
 
@@ -177,9 +190,360 @@ import_tree() {
 	chown -R --reference="$dir" "$dir" 2>/dev/null || true
 }
 
-cmd_path() {
+ctl_file() { printf '%s/%s.ctl\n' "$CONFDIR" "$1"; }
+manifest_file() { printf '%s/%s.manifest\n' "$CTL_STATE" "$1"; }
+
+# Parsed, never sourced: the file is admin-owned and sourcing it would run its
+# contents as root, and a value set for one hub would survive into the next.
+ctl_get() {
+	f=$(ctl_file "$1")
+	[ -f "$f" ] || return 0
+	sed -n "s/^$2=//p" "$f" | tail -n 1
+}
+
+ctl_set() {
+	f=$(ctl_file "$1")
+	mkdir -p "$CONFDIR"
+	tmp=$f.tmp.$$
+	[ -f "$f" ] && grep -v "^$2=" "$f" > "$tmp" 2>/dev/null || : > "$tmp"
+	printf '%s=%s\n' "$2" "$3" >> "$tmp"
+	chmod 0644 "$tmp"
+	mv "$tmp" "$f"
+}
+
+syncdir_of() {
+	d=$(ctl_get "$1" PTOKAX_SYNCDIR)
+	[ -n "$d" ] || die "no syncdir registered for $1 -- run '$self set $1 syncdir <path>'"
+	printf '%s\n' "$d"
+}
+
+hash_of() {
+	[ -f "$1" ] || return 0
+	sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+}
+
+# must succeed even with no manifest: the result is read into a variable and
+# set -e would take a non-zero status here as a fatal assignment
+manifest_lookup() {
+	[ -f "$2" ] || return 0
+	awk -v p="$1" '$2 == p { print $1; exit }' "$2"
+}
+
+cmd_set() {
 	check_instance "${1:-}"
-	state_dir "$1"
+	hub=$1; key=${2:-}; val=${3:-}
+	[ -n "$key" ] || die "usage: $self set <hub> syncdir <path>"
+	case $key in
+	syncdir)
+		[ -n "$val" ] || die "usage: $self set $hub syncdir <path>"
+		[ -d "$val" ] || die "no such directory: $val"
+		case $val in /*) ;; *) die "syncdir must be an absolute path: $val" ;; esac
+		need_root
+		ctl_set "$hub" PTOKAX_SYNCDIR "$val"
+		printf '%s: %s syncdir = %s\n' "$self" "$hub" "$val"
+		;;
+	*) die "unknown setting: $key (known: syncdir)" ;;
+	esac
+}
+
+cmd_get() {
+	check_instance "${1:-}"
+	hub=$1; key=${2:-}
+	[ -n "$key" ] || die "usage: $self get <hub> syncdir|statedir"
+	case $key in
+	statedir) state_dir "$hub" ;;
+	syncdir)  syncdir_of "$hub" ;;
+	*) die "unknown setting: $key (known: syncdir, statedir)" ;;
+	esac
+}
+
+# One itemised rsync pass over the whole tree, listing regular files that differ.
+# Running from the tree root rather than per subtree is what lets a .pxignore
+# pattern read as "scripts/data/*.tbl", the path as the admin sees it.
+#
+# Scope is carried by the filter, first match winning: the admin's excludes lead,
+# then texts/ loses its subdirectories because the hub reads that directory with a
+# single non-recursive pass, then scripts/ and texts/ are admitted and everything
+# else -- cfg/, logs/, language/ -- is dropped.
+rsync_diff() {
+	# $1 src  $2 dst  $3 ignore file
+	if [ -f "$3" ]; then
+		rsync -rni --prune-empty-dirs \
+			--filter="merge,- $3" \
+			--filter='- /texts/*/' \
+			--filter='+ /scripts/' --filter='+ /scripts/**' \
+			--filter='+ /texts/' --filter='+ /texts/*' \
+			--filter='- *' \
+			"$1/" "$2/" 2>/dev/null
+	else
+		rsync -rni --prune-empty-dirs \
+			--filter='- /texts/*/' \
+			--filter='+ /scripts/' --filter='+ /scripts/**' \
+			--filter='+ /texts/' --filter='+ /texts/*' \
+			--filter='- *' \
+			"$1/" "$2/" 2>/dev/null
+	fi |
+		awk 'substr($0,2,1) == "f" { print substr($0,13) }'
+}
+
+# Paths that differ or exist on only one side. Both directions are needed: a
+# single pass only reports what it would send, so it cannot see a file that
+# exists solely on the receiving side.
+sync_candidates() {
+	# $1 syncdir  $2 statedir
+	rsync_diff "$1" "$2" "$1/.pxignore"
+	rsync_diff "$2" "$1" "$1/.pxignore"
+}
+
+# hM hS hD -> none|apply|ask|record|skip|prune
+# Expressed in source/destination terms so push and pull share it.
+classify() {
+	hM=$1; hS=$2; hD=$3
+	if [ -z "$hS" ] && [ -z "$hD" ]; then printf 'prune\n'; return; fi
+	if [ -z "$hM" ]; then
+		[ -z "$hD" ] && { printf 'apply\n'; return; }
+		[ -z "$hS" ] && { printf 'skip\n'; return; }
+		[ "$hS" = "$hD" ] && printf 'record\n' || printf 'ask\n'
+		return
+	fi
+	# absent on one side: removing from the destination always asks, putting a
+	# tracked file back that only the destination lost does not
+	[ -z "$hS" ] && { printf 'ask\n'; return; }
+	[ -z "$hD" ] && { printf 'apply\n'; return; }
+	if [ "$hS" = "$hM" ]; then
+		[ "$hD" = "$hM" ] && printf 'none\n' || printf 'ask\n'
+		return
+	fi
+	[ "$hD" = "$hM" ] && { printf 'apply\n'; return; }
+	[ "$hS" = "$hD" ] && printf 'record\n' || printf 'ask\n'
+}
+
+human_size() { [ -f "$1" ] && wc -c < "$1" | tr -d ' ' || printf '-'; }
+
+# The hub's chat command prefix, so the hint we print is the one that works here.
+cmd_prefix() {
+	p=$(grep -hE '^[[:space:]]*ChatCommandsPrefixes[[:space:]]*=' \
+		"$1/cfg/Settings.pxt" 2>/dev/null | sed 's/.*=[[:space:]]*//' | tr -d ' \t\r')
+	printf '%s' "${p:-!}" | cut -c1
+}
+
+sync_run() {
+	hub=$1; op=$2; dry=$3; force=$4
+
+	have_prog rsync || die "rsync is required for push/pull"
+	have_prog sha256sum || die "sha256sum is required for push/pull"
+
+	syncdir=$(syncdir_of "$hub")
+	[ -d "$syncdir" ] || die "syncdir does not exist: $syncdir"
+	statedir=$(state_dir "$hub")
+	[ -d "$statedir" ] || die "no state directory at $statedir -- run '$self create $hub' first"
+
+	mf=$(manifest_file "$hub")
+	tmp=$(mktemp -d) || die "cannot create a temporary directory"
+	trap 'rm -rf "$tmp"' EXIT INT TERM
+
+	if [ "$op" = push ]; then
+		src=$syncdir; dst=$statedir; other=hub
+	else
+		src=$statedir; dst=$syncdir; other=workspace
+	fi
+
+	sync_candidates "$syncdir" "$statedir" > "$tmp/raw"
+
+	if [ -f "$mf" ]; then
+		awk '/^#/ { next } NF == 2 { print $2 }' "$mf" >> "$tmp/raw"
+	else
+		# No manifest yet, so take a full census rather than only what differs.
+		# Diffing against an empty directory lists every file the ignore file
+		# admits, which is exactly the set worth tracking from here on.
+		mkdir -p "$tmp/empty"
+		rsync_diff "$syncdir" "$tmp/empty" "$syncdir/.pxignore" >> "$tmp/raw"
+		rsync_diff "$statedir" "$tmp/empty" "$syncdir/.pxignore" >> "$tmp/raw"
+	fi
+	sort -u "$tmp/raw" | grep -v '^[[:space:]]*$' > "$tmp/paths" || :
+
+	: > "$tmp/plan"
+	while IFS= read -r p; do
+		hL=$(hash_of "$syncdir/$p")
+		hR=$(hash_of "$statedir/$p")
+		hM=$(manifest_lookup "$p" "$mf")
+		if [ "$op" = push ]; then hS=$hL; hD=$hR; else hS=$hR; hD=$hL; fi
+		act=$(classify "$hM" "$hS" "$hD")
+		[ "$act" = none ] && continue
+		if   [ -z "$hS" ];        then why="would delete on $other"
+		elif [ -z "$hM" ];        then why="untracked, differs"
+		elif [ "$hS" = "$hM" ];   then why="changed on $other"
+		else                           why="conflict"
+		fi
+		printf '%s\t%s\t%s\n' "$act" "$why" "$p" >> "$tmp/plan"
+	done < "$tmp/paths"
+
+	# sync_resolve and sync_apply read the state above; sh has no locals, so
+	# hub, op, dry, force, syncdir, statedir, src, dst, other, mf and tmp are theirs.
+	sync_resolve
+	sync_apply
+}
+
+# Turn every 'ask' row into apply or skip. Only these rows prompt.
+sync_resolve() {
+	: > "$tmp/final"; : > "$tmp/dirauto"; : > "$tmp/ignore"
+	auto=
+	tab=$(printf '\t')
+
+	# Nothing to prompt on, so answer every ask the way the prompt defaults and
+	# say so once, rather than printing a menu nobody can reach. Opening it is
+	# the test: /dev/tty passes -r with no controlling terminal behind it.
+	if ! ( : < /dev/tty ) 2>/dev/null && [ "$force" = no ] && [ "$dry" = no ]; then
+		if grep -q "^ask$tab" "$tmp/plan" 2>/dev/null; then
+			printf '%s: not interactive, leaving every contested file alone\n' "$self" >&2
+		fi
+		auto=skip
+	fi
+
+	while IFS="$tab" read -r act why p; do
+		if [ "$act" != ask ]; then
+			printf '%s\t%s\t%s\n' "$act" "$why" "$p" >> "$tmp/final"
+			continue
+		fi
+		if [ "$force" = yes ]; then
+			printf 'apply\t%s\t%s\n' "$why" "$p" >> "$tmp/final"; continue
+		fi
+		if [ "$dry" = yes ]; then
+			printf 'ask\t%s\t%s\n' "$why" "$p" >> "$tmp/final"; continue
+		fi
+		if [ -n "$auto" ]; then
+			printf '%s\t%s\t%s\n' "$auto" "$why" "$p" >> "$tmp/final"; continue
+		fi
+
+		d=${p%/*}; [ "$d" = "$p" ] && d=.
+		hit=
+		while IFS="$tab" read -r dd aa; do
+			case $p in "$dd"/*) hit=$aa; break ;; esac
+		done < "$tmp/dirauto"
+		if [ -n "$hit" ]; then
+			printf '%s\t%s\t%s\n' "$hit" "$why" "$p" >> "$tmp/final"; continue
+		fi
+
+		printf '\n%s\n' "$p"
+		printf '  %s   workspace %s / hub %s\n' "$why" \
+			"$(human_size "$syncdir/$p")" "$(human_size "$statedir/$p")"
+		printf '  [y] apply   [d] apply to %s/   [a] apply to all remaining\n' "$d"
+		printf '  [n] skip    [i] never sync this file   [I] never sync %s/\n' "$d"
+		printf '  [q] stop asking\n  > '
+		reply=n
+		read -r reply < /dev/tty 2>/dev/null || reply=n
+		case $reply in
+		y)   printf 'apply\t%s\t%s\n' "$why" "$p" >> "$tmp/final" ;;
+		a|A) auto=apply; printf 'apply\t%s\t%s\n' "$why" "$p" >> "$tmp/final" ;;
+		d|D) printf '%s\t%s\n' "$d" apply >> "$tmp/dirauto"
+		     printf 'apply\t%s\t%s\n' "$why" "$p" >> "$tmp/final" ;;
+		i)   printf '%s\n' "$p" >> "$tmp/ignore"
+		     printf 'skip\t%s\t%s\n' "$why" "$p" >> "$tmp/final" ;;
+		I)   printf '%s/\n' "$d" >> "$tmp/ignore"
+		     printf '%s\t%s\n' "$d" skip >> "$tmp/dirauto"
+		     printf 'skip\t%s\t%s\n' "$why" "$p" >> "$tmp/final" ;;
+		q|Q) auto=skip; printf 'skip\t%s\t%s\n' "$why" "$p" >> "$tmp/final" ;;
+		*)   printf 'skip\t%s\t%s\n' "$why" "$p" >> "$tmp/final" ;;
+		esac
+	done < "$tmp/plan"
+}
+
+sync_apply() {
+	tab=$(printf '\t')
+	: > "$tmp/copy"; : > "$tmp/del"
+	nask=0; nskip=0
+
+	while IFS="$tab" read -r act why p; do
+		case $act in
+		apply)
+			if [ -f "$src/$p" ]; then printf '%s\n' "$p" >> "$tmp/copy"
+			else printf '%s\n' "$p" >> "$tmp/del"; fi ;;
+		ask)  nask=$((nask + 1)) ;;
+		skip) nskip=$((nskip + 1)) ;;
+		esac
+	done < "$tmp/final"
+
+	if [ "$dry" = yes ]; then
+		while IFS="$tab" read -r act why p; do
+			case $act in
+			apply)  printf '  %-7s %s\n' "$op" "$p" ;;
+			ask)    printf '  %-7s %s  (%s)\n' "ask" "$p" "$why" ;;
+			record) printf '  %-7s %s\n' "track" "$p" ;;
+			esac
+		done < "$tmp/final"
+		printf '%s: %s would change, %s would be asked about\n' \
+			"$self" "$(wc -l < "$tmp/copy" | tr -d ' ')" "$nask"
+		return 0
+	fi
+
+	# a .lua at the top of scripts/ that the hub has not seen lands disabled
+	: > "$tmp/newscripts"
+	if [ "$op" = push ]; then
+		while IFS= read -r p; do
+			case $p in
+			scripts/*/*) : ;;
+			scripts/*.lua)
+				[ -f "$statedir/$p" ] || printf '%s\n' "${p#scripts/}" >> "$tmp/newscripts" ;;
+			esac
+		done < "$tmp/copy"
+	fi
+
+	if [ -s "$tmp/copy" ]; then
+		rsync -a --files-from="$tmp/copy" "$src/" "$dst/" ||
+			die "rsync failed, nothing recorded"
+	fi
+	while IFS= read -r p; do rm -f "$dst/$p"; done < "$tmp/del"
+
+	# hand root-written files to whoever owns the tree they landed in
+	chown -R --reference="$dst" "$dst" 2>/dev/null || :
+
+	if [ -s "$tmp/ignore" ]; then
+		cat "$tmp/ignore" >> "$syncdir/.pxignore"
+		chown --reference="$syncdir" "$syncdir/.pxignore" 2>/dev/null || :
+	fi
+
+	# The agreed state is simply what now matches on both sides, so a skipped or
+	# still-conflicted path drops out on its own with no bookkeeping.
+	mkdir -p "$CTL_STATE"
+	{
+		printf '# ptokaxctl sync manifest\n'
+		printf '# hub=%s  syncdir=%s\n' "$hub" "$syncdir"
+		printf '# synced=%s\n' "$(date -Iseconds 2>/dev/null || date)"
+		while IFS= read -r p; do
+			a=$(hash_of "$syncdir/$p")
+			b=$(hash_of "$statedir/$p")
+			if [ -n "$a" ] && [ "$a" = "$b" ]; then printf '%s  %s\n' "$a" "$p"; fi
+		done < "$tmp/paths"
+	} > "$tmp/manifest.new"
+	chmod 0600 "$tmp/manifest.new"
+	mv "$tmp/manifest.new" "$mf"
+
+	printf '%s: %s applied, %s skipped\n' "$self" \
+		"$(( $(wc -l < "$tmp/copy") + $(wc -l < "$tmp/del") ))" "$nskip"
+
+	if [ -s "$tmp/newscripts" ]; then
+		printf '\n%s new script(s) installed but not enabled:\n' "$(wc -l < "$tmp/newscripts" | tr -d ' ')"
+		pfx=$(cmd_prefix "$statedir")
+		while IFS= read -r n; do printf '  %s\n' "$n"; done < "$tmp/newscripts"
+		printf '  %s reload-scripts %s\n' "$self" "$hub"
+		printf '  %sstartscript <name>      (from an op client)\n' "$pfx"
+	fi
+}
+
+cmd_sync() {
+	op=$1; shift
+	check_instance "${1:-}"
+	hub=$1; shift
+	dry=no; force=no
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--dry-run|-n) dry=yes; shift ;;
+		--force|-f)   force=yes; shift ;;
+		*) die "unknown option: $1" ;;
+		esac
+	done
+	[ "$dry" = yes ] || need_root
+	sync_run "$hub" "$op" "$dry" "$force"
 }
 
 cmd_import() {
@@ -301,7 +665,10 @@ list)              cmd_list "$@" ;;
 reload-scripts)    check_instance "${1:-}"; exec systemctl reload "$(unit_of "$1")" ;;
 create)            cmd_create "$@" ;;
 import)            cmd_import "$@" ;;
-path)              cmd_path "$@" ;;
+set)               cmd_set "$@" ;;
+get)               cmd_get "$@" ;;
+push)              cmd_sync push "$@" ;;
+pull)              cmd_sync pull "$@" ;;
 setup)             cmd_setup "$@" ;;
 check)             cmd_check "$@" ;;
 log)               cmd_log "$@" ;;

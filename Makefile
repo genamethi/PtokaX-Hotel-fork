@@ -96,8 +96,14 @@ ALL_LIBS     := $(LUA_LIBS) $(ZLIB_LIBS) $(DB_LIBS) $(TINYXML_LIBS) \
 #*******************************************************************************
 # Build
 #*******************************************************************************
+UNIT_OUT := build/systemd/ptokax@.service build/systemd/ptokax@.socket \
+            build/systemd/ptokaxctl
+
 .PHONY: all
 all: $(TARGET)
+ifeq ($(SYSTEMD),yes)
+all: $(UNIT_OUT)
+endif
 
 $(TARGET): $(OBJS)
 	$(call say,LINK,$@)
@@ -126,8 +132,21 @@ config.mk: $(srcdir)/configure
 #*******************************************************************************
 # cfg/, scripts/ and texts/ live in the runtime config directory (-c). language/ is
 # installed here so instances share one copy; a per-instance language/ still wins.
+.PHONY: check-built
+check-built:
+	@test -x $(TARGET) || { \
+	    echo "$(TARGET) is not built -- run 'make' as yourself, then install."; \
+	    exit 1; }
+ifeq ($(SYSTEMD),yes)
+	@for f in $(UNIT_OUT); do \
+	    test -f "$$f" || { \
+	        echo "$$f is not built -- run 'make' as yourself, then install."; \
+	        exit 1; }; \
+	done
+endif
+
 .PHONY: install
-install: $(TARGET)
+install: check-built
 	$(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(datadir)/ptokax/language
 	$(INSTALL) -m 755 $(TARGET) $(DESTDIR)$(bindir)/$(TARGET)
 	$(INSTALL) -m 644 $(srcdir)/language/*.xml $(DESTDIR)$(datadir)/ptokax/language/
@@ -166,7 +185,7 @@ build/systemd/ptokaxctl: $(UNIT_SRC)/ptokaxctl config.mk build/systemd/.stamp-$(
 	$(Q)$(UNIT_SRC)/unitgen.sh --systemd-version=$(SYSTEMD_VERSION) $(UNIT_SUBST) < $< > $@
 
 .PHONY: install-systemd
-install-systemd: build/systemd/ptokax@.service build/systemd/ptokax@.socket build/systemd/ptokaxctl
+install-systemd: check-built
 	$(INSTALL) -d $(DESTDIR)$(systemdsystemunitdir) $(DESTDIR)$(bindir) \
 	            $(DESTDIR)$(datadir)/ptokax/systemd $(DESTDIR)$(docdir)
 	$(INSTALL) -m 644 build/systemd/ptokax@.service $(DESTDIR)$(systemdsystemunitdir)/

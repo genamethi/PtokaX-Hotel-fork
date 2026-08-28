@@ -1,0 +1,3 @@
+[submodule "console/ncdc"]
+	path = console/ncdc
+	url = git://g.blicky.net/ncdc.git

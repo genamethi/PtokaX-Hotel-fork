@@ -1007,6 +1007,12 @@ if [ "$with_systemd" = yes ]; then
     [ "$SYSTEMD_VERSION" -ge 240 ] || warn \
       "systemd $SYSTEMD_VERSION is below 240; unit falls back to Type=simple."
   fi
+
+  # ptokaxctl shells out to it; nothing in the hub links or calls it, so this is
+  # a heads-up and not a build dependency. ptokaxctl checks again at run time,
+  # since it can be installed somewhere rsync is not.
+  have_prog rsync || warn \
+    "rsync not found; 'ptokaxctl push' and 'ptokaxctl pull' will not run."
 else
   result "disabled"
 fi
