@@ -31,11 +31,14 @@ Until the install-systemd target lands, render and place the unit by hand:
       | sudo tee /etc/systemd/system/'ptokax@.service' >/dev/null
   sudo systemctl daemon-reload
 
-ptokaxctl carries the same @bindir@/@datadir@/@docdir@ placeholders and is substituted
-by the same install target. Running it from the source tree before then, override the
-paths in the environment:
+ptokaxctl carries the same @bindir@/@sysconfdir@/@datadir@/@docdir@ placeholders and is
+substituted by the same install target. Running it from the source tree before then,
+override the paths in the environment:
 
   PTOKAX_BIN=/usr/bin/PtokaX ./contrib/systemd/ptokaxctl list
+
+push and pull shell out to rsync. Nothing else in ptokaxctl or the hub needs it, so
+configure only warns when it is missing and push and pull check again at run time.
 
 The unit needs systemd 240 or newer for Type=exec; older systemd gets Type=simple, which
 cannot report a failed start. Directives added after 240 are dropped automatically for
