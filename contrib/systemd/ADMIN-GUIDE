@@ -22,7 +22,7 @@ they can be reloaded without opening a client.
 	ptokaxctl reload-scripts PXdev
 
 Same code path as ScriptMan.Restart(), so the same effects: script state is
-lost and bots re-announce. Nobody is disconnected.
+lost and bots re-announce. No disconnects.
 
 
 Where the files went
