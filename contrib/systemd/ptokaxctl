@@ -269,6 +269,7 @@ rsync_diff() {
 	# $1 src  $2 dst  $3 ignore file
 	if [ -f "$3" ]; then
 		rsync -rni --prune-empty-dirs \
+			--filter='- .git' \
 			--filter="merge,- $3" \
 			--filter='- /texts/*/' \
 			--filter='+ /scripts/' --filter='+ /scripts/**' \
@@ -277,6 +278,7 @@ rsync_diff() {
 			"$1/" "$2/" 2>/dev/null
 	else
 		rsync -rni --prune-empty-dirs \
+			--filter='- .git' \
 			--filter='- /texts/*/' \
 			--filter='+ /scripts/' --filter='+ /scripts/**' \
 			--filter='+ /texts/' --filter='+ /texts/*' \
