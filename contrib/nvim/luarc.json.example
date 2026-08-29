@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime": {
+    "version": "Lua 5.4",
+    "path": ["?.lua", "?/init.lua", "libs/?.lua", "libs/?/init.lua"]
+  },
+  "workspace": {
+    "library": ["/home/erpage159/fluid/byo/repos/PtokaX/contrib/nvim"],
+    "checkThirdParty": false
+  },
+  "diagnostics": {
+    "globals": [],
+    "severity": {
+      "undefined-global": "Error",
+      "undefined-field": "Error",
+      "param-type-mismatch": "Error",
+      "assign-type-mismatch": "Error",
+      "return-type-mismatch": "Error",
+      "missing-parameter": "Error",
+      "redundant-parameter": "Error",
+      "cast-local-type": "Error",
+      "need-check-nil": "Error"
+    }
+  },
+  "type": {
+    "weakUnionCheck": true,
+    "weakNilCheck": false,
+    "castNumberToInteger": false
+  },
+  "hint": { "enable": true, "paramType": true }
+}
