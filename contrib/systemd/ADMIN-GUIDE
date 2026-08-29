@@ -84,26 +84,28 @@ Lua console
 -----------
 
 Trying one API call means a push and a script reload, and both need sudo. The
-console evaluates a chunk against a fresh Lua state holding the whole hub API,
-and print output goes to the journal.
+console runs a chunk against a fresh Lua state with the full hub API. Output
+goes to the journal.
 
+	systemctl stop ptokax@PXdev
 	systemctl enable --now ptokax-console@PXdev.socket
+	systemctl start ptokax@PXdev
 
 	socat - UNIX-CONNECT:/run/ptokax/PXdev-console.sock < chunk.lua
 	journalctl PTOKAX_SUBSYSTEM=console -f
 
-Write a chunk, close the socket. Anything that speaks a unix socket will do.
+systemd refuses to start a socket whose service is already up, so the hub has
+to be stopped for that middle command. It is a one time cost. From then on the
+socket comes up with sockets.target at boot.
 
-The state is new for every connection, so a global set by one chunk is gone by
-the next. Settings and registrations do carry over, because those live in the
-hub rather than in the state.
+Write a chunk, close the socket. Each connection gets a new state, so globals
+do not survive between chunks. Settings and registrations do.
 
-The socket is root-only as shipped. console-access.conf.example opens it to a
-group, which grants more than push does, since a chunk runs arbitrary code as
-the hub user.
+The socket is root-only. A chunk runs as the hub user and has os.execute, so
+console-access.conf.example grants more than push does.
 
-A chunk that never returns blocks the hub, and only SIGKILL ends it. Scripts
-carry the same limit.
+A chunk that never returns blocks the hub the same way a script does, and only
+SIGKILL ends it.
 
 
 Logging

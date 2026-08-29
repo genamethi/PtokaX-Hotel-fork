@@ -34,6 +34,7 @@ StateDirectory=ptokax/%i
 StateDirectoryMode=0700
 RuntimeDirectory=ptokax/%i
 WorkingDirectory=%S/ptokax/%i
+Sockets=ptokax-console@%i.socket
 
 # Defined empty so the ExecStart expansion below does not warn when the optional
 # EnvironmentFile is absent; the file overrides this when it exists.

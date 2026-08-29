@@ -4,10 +4,15 @@
 # against a fresh state carrying the full hub API, and print output and errors
 # go to the journal.
 #
+#   systemctl stop ptokax@main
 #   systemctl enable --now ptokax-console@main.socket
+#   systemctl start ptokax@main
 #
 #   socat - UNIX-CONNECT:/run/ptokax/main-console.sock < chunk.lua
 #   journalctl PTOKAX_SUBSYSTEM=console -f
+#
+# The hub has to be stopped to start this socket, and ptokax@.service names it
+# in Sockets= to inherit the fd.
 #
 # The socket is root-only as shipped. console-access.conf.example opens it to a
 # group. Read what that grants before applying it.
@@ -17,9 +22,12 @@
 
 [Unit]
 Description=PtokaX Lua console socket -- instance %i
-PartOf=ptokax@%i.service
 
 [Socket]
+# the service creates /run/ptokax/%i, but sockets start before services, so the
+# parent has to be declared here too or the bind has nowhere to go on boot
+RuntimeDirectory=ptokax
+RuntimeDirectoryPreserve=yes
 ListenStream=/run/ptokax/%i-console.sock
 SocketMode=0600
 FileDescriptorName=console
