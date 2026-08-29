@@ -13,34 +13,16 @@ to write. Any editor with an LSP client works, not just Neovim.
 Setup
 -----
 
-Copy the config into the directory you edit scripts in, which is your syncdir
-rather than the hub's own tree.
-
-	cp contrib/nvim/luarc.json.example ~/.local/share/dchubs/PXdev/.luarc.json
-
-Then edit workspace.library in it to point at contrib/nvim in this checkout.
-Open any .lua file in that directory and the server picks it up.
-
-
-What it catches
----------------
-
-	Core.SendToAll(123)                      integer given, string wanted
-	Core.NoSuchFunction()                    undefined field
-	SetMan.tStrings.NotAReal                 undefined field
-	Core.Kick(nil)                           nil given, User wanted
-	Core.Kick(tUser)                         3 arguments wanted, 1 given
-
-Every setting, permission and boolean id is a real field, so a typo in
-SetMan.tNumbers or ProfMan.tPermissions is an error rather than a nil at
-runtime.
+It's cleanest to put this in your nvim config folder, imo. But check your
+runtime path. I just copy this tree directly into ~/.config/nvim/. Hence,
+the json is setup that way.
 
 
 Event functions need annotating
 -------------------------------
 
 The server does not take parameter types from the declared global, so tUser is
-unknown until you say so. Two lines per handler:
+unknown until you specify as such. 
 
 	--- @param tUser User
 	--- @param sData string
@@ -48,12 +30,8 @@ unknown until you say so. Two lines per handler:
 		Core.SendToAll(tUser.sNick .. sData)
 	end
 
-Without them the body still checks, but tUser is any and its fields are not.
-
-<leader>pa writes them for you. Put the cursor on the function line and it
-inserts one --- @param per argument, typed by the same prefix rule the
-generator uses.
-
+Followed by <leader>pa to save. Put the cursor on the function line and it
+inserts one --- @param per argument.
 
 Regenerating
 ------------
@@ -70,22 +48,16 @@ not listed falls back to reading the description, which gives boolean? for
 "Return nil when failed, true when success", table for "Return table with",
 and any otherwise. Add to RETURNS rather than improving the prose reader.
 
-The four tables the docs describe in prose rather than as field lists are
-hand-written in PREAMBLE: BotInfo, ScriptInfo, OpChatInfo, HubBotInfo.
-
 
 Known gaps
 ----------
 
 Overloads are emitted in document order, so the first form listed is the one
-signature help shows first. Core.GetOnlineUsers has four. They all resolve,
-the ordering is cosmetic.
+signature help shows first. Core.GetOnlineUsers has four. 
 
 Functions taking sNick/sIP alternatives are typed from the first name only,
-so BanMan.GetBan is string either way, which happens to be right, but the
-pattern is not general.
+so BanMan.GetBan is string either way.
 
 Nil checking is strict on field access, so Core.GetUser("bob").sNick is an
 error until you test the result. It is lenient about passing a string? into a
-string parameter, which is lua-language-server behaviour rather than a gap in
-the definitions.
+string parameter (LuaLS behavior).

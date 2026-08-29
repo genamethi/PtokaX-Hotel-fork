@@ -5,7 +5,7 @@
     "path": ["?.lua", "?/init.lua", "libs/?.lua", "libs/?/init.lua"]
   },
   "workspace": {
-    "library": ["/home/erpage159/fluid/byo/repos/PtokaX/contrib/nvim"],
+    "library": ["~/.config/nvim/lua/pxapi"],
     "checkThirdParty": false
   },
   "diagnostics": {
