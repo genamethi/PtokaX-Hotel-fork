@@ -97,7 +97,7 @@ ALL_LIBS     := $(LUA_LIBS) $(ZLIB_LIBS) $(DB_LIBS) $(TINYXML_LIBS) \
 # Build
 #*******************************************************************************
 UNIT_OUT := build/systemd/ptokax@.service build/systemd/ptokax@.socket \
-            build/systemd/ptokaxctl
+            build/systemd/ptokax-console@.socket build/systemd/ptokaxctl
 
 .PHONY: all
 all: $(TARGET)
@@ -180,6 +180,11 @@ build/systemd/ptokax@.socket: $(UNIT_SRC)/ptokax@.socket.in $(UNIT_SRC)/unitgen.
 	$(call say,GEN,$@)
 	$(Q)$(UNIT_SRC)/unitgen.sh --systemd-version=$(SYSTEMD_VERSION) $(UNIT_SUBST) < $< > $@
 
+build/systemd/ptokax-console@.socket: $(UNIT_SRC)/ptokax-console@.socket.in $(UNIT_SRC)/unitgen.sh \
+                                      config.mk build/systemd/.stamp-$(SYSTEMD_VERSION)
+	$(call say,GEN,$@)
+	$(Q)$(UNIT_SRC)/unitgen.sh --systemd-version=$(SYSTEMD_VERSION) $(UNIT_SUBST) < $< > $@
+
 build/systemd/ptokaxctl: $(UNIT_SRC)/ptokaxctl config.mk build/systemd/.stamp-$(SYSTEMD_VERSION)
 	$(call say,GEN,$@)
 	$(Q)$(UNIT_SRC)/unitgen.sh --systemd-version=$(SYSTEMD_VERSION) $(UNIT_SUBST) < $< > $@
@@ -190,6 +195,7 @@ install-systemd: check-built
 	            $(DESTDIR)$(datadir)/ptokax/systemd $(DESTDIR)$(docdir)
 	$(INSTALL) -m 644 build/systemd/ptokax@.service $(DESTDIR)$(systemdsystemunitdir)/
 	$(INSTALL) -m 644 build/systemd/ptokax@.socket $(DESTDIR)$(systemdsystemunitdir)/
+	$(INSTALL) -m 644 build/systemd/ptokax-console@.socket $(DESTDIR)$(systemdsystemunitdir)/
 	$(INSTALL) -m 644 $(UNIT_SRC)/ptokax.target $(DESTDIR)$(systemdsystemunitdir)/
 	$(INSTALL) -m 755 build/systemd/ptokaxctl $(DESTDIR)$(bindir)/ptokaxctl
 	$(INSTALL) -m 644 $(UNIT_SRC)/ptokax@.service.in $(DESTDIR)$(datadir)/ptokax/systemd/
@@ -203,8 +209,9 @@ install-systemd: check-built
 	@echo ""
 
 .PHONY: check-systemd
-check-systemd: build/systemd/ptokax@.service
-	systemd-analyze verify $<
+check-systemd: build/systemd/ptokax@.service build/systemd/ptokax@.socket \
+                build/systemd/ptokax-console@.socket
+	systemd-analyze verify $^
 	systemd-analyze security --offline=true --threshold=20 $<
 
 .PHONY: uninstall
@@ -212,6 +219,8 @@ uninstall:
 	rm -f $(DESTDIR)$(bindir)/$(TARGET)
 	rm -f $(DESTDIR)$(bindir)/ptokaxctl
 	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax@.service
+	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax@.socket
+	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax-console@.socket
 	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax.target
 	rm -rf $(DESTDIR)$(datadir)/ptokax
 

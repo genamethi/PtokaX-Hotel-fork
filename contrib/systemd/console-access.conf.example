@@ -1,0 +1,19 @@
+# Reach the Lua console without sudo.
+#
+# Install as /etc/systemd/system/ptokax-console@<instance>.socket.d/10-access.conf
+# and create the group first:
+#
+#   groupadd -r ptokax-console
+#   gpasswd -a <you> ptokax-console
+#
+# systemd owns the socket and creates it as root, so this group is unrelated to
+# the hub's own User= and works whether or not DynamicUser is on.
+#
+# What this grants is not the same as write access to scripts/. A chunk runs
+# arbitrary code as the hub user, which includes os.execute, and the hub holds
+# CAP_NET_BIND_SERVICE unless no-capabilities.conf.example is applied. Give this
+# group only to people you would give root.
+
+[Socket]
+SocketGroup=ptokax-console
+SocketMode=0660

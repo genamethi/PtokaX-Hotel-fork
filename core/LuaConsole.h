@@ -16,23 +16,16 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 //---------------------------------------------------------------------------
-#ifndef sdlistenH
-#define sdlistenH
+#ifndef LuaConsoleH
+#define LuaConsoleH
 //---------------------------------------------------------------------------
 
-// must run before any thread is created, and clears LISTEN_* from the environment
-void PxListenFdsInit();
+// claims the fd systemd named "console"; with no such fd the console stays off
+void PxConsoleInit();
 
-bool PxAdoptListenFd(const int iFamily, const uint16_t ui16Port, int * piFd);
+void PxConsolePoll();
 
-bool PxAdoptListenFdByName(const char * sName, int * piFd);
-
-// an adopted fd survives the in-hub restart that tears down every ServerThread
-void PxReleaseListenFd(const int iFd);
-
-bool PxIsListenFd(const int iFd);
-
-void PxReportUnclaimedFds();
+void PxConsoleClose();
 
 //---------------------------------------------------------------------------
 #endif

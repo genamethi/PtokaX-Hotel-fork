@@ -111,6 +111,8 @@ struct Script {
 };
 //------------------------------------------------------------------------------
 
+void LuaStateInit(lua_State * pLua);
+
 bool ScriptStart(Script * pScript);
 void ScriptStop(Script * pScript);
 

@@ -5,12 +5,15 @@ Files here
 ----------
 
   ptokax@.service.in           templated unit, with version guards
+  ptokax@.socket.in            optional: systemd owns the hub's listening sockets
+  ptokax-console@.socket.in    optional: per-instance Lua console socket
   unitgen.sh                   renders the template for a target systemd version
   ptokax.target                group handle for every instance
   ptokaxctl                    admin front-end
   ptokax.sysusers.example      optional static user, one per instance
   group-access.conf.example    drop-in: group access instead of a transient UID
   no-capabilities.conf.example drop-in: drop CAP_NET_BIND_SERVICE
+  console-access.conf.example  drop-in: reach the Lua console without sudo
 
 Install
 -------
@@ -87,6 +90,11 @@ three modes without changing the shipped unit.
      State moves to /var/lib/ptokax/<instance> at mode 0750, so members of the
      ptokax-<instance> group can read logs and drop .lua files in without sudo. This is
      the only mode that gives that; it costs the implied hardening DynamicUser brings.
+
+The Lua console socket is not part of this. systemd creates it as root before the
+service starts, so SocketGroup= in console-access.conf.example names any group you
+like and has no bearing on the service's User=. Mode A keeps all its hardening with
+an unprivileged console.
 
 Port 411
 --------

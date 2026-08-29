@@ -32,6 +32,7 @@ enum LogPriority {
 #define PX_SUB_HUB     "hub"
 #define PX_SUB_SCRIPT  "script"
 #define PX_SUB_DEBUG   "debug"
+#define PX_SUB_CONSOLE "console"
 
 void LogEmit(const int iPriority, const char * sSubsystem, const char * sMsg);
 
@@ -43,6 +44,9 @@ void LogEmitFormat(const int iPriority, const char * sSubsystem, const char * sF
 
 // never allocates
 void LogEmitNoAlloc(const int iPriority, const char * sSubsystem, const char * sMsg);
+
+// keeps the subsystem as a journal field rather than only a text prefix
+void LogEmitJournal(const int iPriority, const char * sSubsystem, const char * sMsg);
 
 // adds one journal field; falls back to LogEmit with the value folded into the text
 void LogEmitField(const int iPriority, const char * sSubsystem, const char * sField,

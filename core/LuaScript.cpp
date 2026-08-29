@@ -528,6 +528,80 @@ static void AddScriptPaths(lua_State * pLua) {
 }
 //------------------------------------------------------------------------------
 
+void LuaStateInit(lua_State * pLua) {
+	luaL_openlibs(pLua);
+
+	AddScriptPaths(pLua);
+
+	lua_atpanic(pLua, ScriptPanic);
+
+    // replace internal lua os.exit with correct shutdown
+    lua_getglobal(pLua, "os");
+
+    if(lua_istable(pLua, -1)) {
+        lua_pushcfunction(pLua, OsExit);
+        lua_setfield(pLua, -2, "exit");
+
+        lua_pop(pLua, 1);
+    }
+
+#if LUA_VERSION_NUM > 501
+    luaL_requiref(pLua, "Core", RegCore, 1);
+	lua_pop(pLua, 1);
+
+    luaL_requiref(pLua, "SetMan", RegSetMan, 1);
+	AddSettingIds(pLua);
+
+    luaL_requiref(pLua, "RegMan", RegRegMan, 1);
+    lua_pop(pLua, 1);
+
+    luaL_requiref(pLua, "BanMan", RegBanMan, 1);
+    lua_pop(pLua, 1);
+
+    luaL_requiref(pLua, "ProfMan", RegProfMan, 1);
+	AddPermissionsIds(pLua);
+
+    luaL_requiref(pLua, "TmrMan", RegTmrMan, 1);
+    lua_pop(pLua, 1);
+
+    luaL_requiref(pLua, "UDPDbg", RegUDPDbg, 1);
+    lua_pop(pLua, 1);
+
+    luaL_requiref(pLua, "ScriptMan", RegScriptMan, 1);
+    lua_pop(pLua, 1);
+
+    luaL_requiref(pLua, "IP2Country", RegIP2Country, 1);
+    lua_pop(pLua, 1);
+#else
+	RegCore(pLua);
+
+	RegSetMan(pLua);
+
+    lua_getglobal(pLua, "SetMan");
+
+    if(lua_istable(pLua, -1)) {
+        AddSettingIds(pLua);
+    }
+
+	RegRegMan(pLua);
+	RegBanMan(pLua);
+
+	RegProfMan(pLua);
+
+    lua_getglobal(pLua, "ProfMan");
+
+    if(lua_istable(pLua, -1)) {
+        AddPermissionsIds(pLua);
+    }
+
+	RegTmrMan(pLua);
+	RegUDPDbg(pLua);
+	RegScriptMan(pLua);
+	RegIP2Country(pLua);
+#endif
+}
+//------------------------------------------------------------------------------
+
 bool ScriptStart(Script * pScript) {
 	pScript->m_ui16Functions = 65535;
 	pScript->m_ui32DataArrivals = 4294967295U;
@@ -549,76 +623,7 @@ bool ScriptStart(Script * pScript) {
         return false;
     }
 
-	luaL_openlibs(pScript->m_pLua);
-
-	AddScriptPaths(pScript->m_pLua);
-
-	lua_atpanic(pScript->m_pLua, ScriptPanic);
-
-    // replace internal lua os.exit with correct shutdown
-    lua_getglobal(pScript->m_pLua, "os");
-
-    if(lua_istable(pScript->m_pLua, -1)) {
-        lua_pushcfunction(pScript->m_pLua, OsExit);
-        lua_setfield(pScript->m_pLua, -2, "exit");
-
-        lua_pop(pScript->m_pLua, 1);
-    }
-
-#if LUA_VERSION_NUM > 501
-    luaL_requiref(pScript->m_pLua, "Core", RegCore, 1);
-	lua_pop(pScript->m_pLua, 1);
-
-    luaL_requiref(pScript->m_pLua, "SetMan", RegSetMan, 1);
-	AddSettingIds(pScript->m_pLua);
-
-    luaL_requiref(pScript->m_pLua, "RegMan", RegRegMan, 1);
-    lua_pop(pScript->m_pLua, 1);
-
-    luaL_requiref(pScript->m_pLua, "BanMan", RegBanMan, 1);
-    lua_pop(pScript->m_pLua, 1);
-
-    luaL_requiref(pScript->m_pLua, "ProfMan", RegProfMan, 1);
-	AddPermissionsIds(pScript->m_pLua);
-
-    luaL_requiref(pScript->m_pLua, "TmrMan", RegTmrMan, 1);
-    lua_pop(pScript->m_pLua, 1);
-
-    luaL_requiref(pScript->m_pLua, "UDPDbg", RegUDPDbg, 1);
-    lua_pop(pScript->m_pLua, 1);
-
-    luaL_requiref(pScript->m_pLua, "ScriptMan", RegScriptMan, 1);
-    lua_pop(pScript->m_pLua, 1);
-
-    luaL_requiref(pScript->m_pLua, "IP2Country", RegIP2Country, 1);
-    lua_pop(pScript->m_pLua, 1);
-#else
-	RegCore(pScript->m_pLua);
-
-	RegSetMan(pScript->m_pLua);
-
-    lua_getglobal(pScript->m_pLua, "SetMan");
-
-    if(lua_istable(pScript->m_pLua, -1)) {
-        AddSettingIds(pScript->m_pLua);
-    }
-
-	RegRegMan(pScript->m_pLua);
-	RegBanMan(pScript->m_pLua);
-
-	RegProfMan(pScript->m_pLua);
-
-    lua_getglobal(pScript->m_pLua, "ProfMan");
-
-    if(lua_istable(pScript->m_pLua, -1)) {
-        AddPermissionsIds(pScript->m_pLua);
-    }
-
-	RegTmrMan(pScript->m_pLua);
-	RegUDPDbg(pScript->m_pLua);
-	RegScriptMan(pScript->m_pLua);
-	RegIP2Country(pScript->m_pLua);
-#endif
+	LuaStateInit(pScript->m_pLua);
 
 	if(luaL_dofile(pScript->m_pLua, (ServerManager::m_sScriptPath+pScript->m_sName).c_str()) == 0) {
 #ifdef _BUILD_GUI

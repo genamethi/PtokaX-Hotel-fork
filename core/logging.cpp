@@ -26,16 +26,17 @@
 
 static const size_t PX_LOG_BUFSIZE = 4096;
 
-enum LogStream { PX_STREAM_SYSTEM, PX_STREAM_SCRIPT, PX_STREAM_DEBUG, PX_STREAM_COUNT };
+enum LogStream { PX_STREAM_SYSTEM, PX_STREAM_SCRIPT, PX_STREAM_DEBUG, PX_STREAM_CONSOLE, PX_STREAM_COUNT };
 
 static pthread_mutex_t g_mtxLog = PTHREAD_MUTEX_INITIALIZER;
-static FILE * g_pFiles[PX_STREAM_COUNT] = { NULL, NULL, NULL };
-static bool g_bOpenFailed[PX_STREAM_COUNT] = { false, false, false };
+static FILE * g_pFiles[PX_STREAM_COUNT] = { NULL, NULL, NULL, NULL };
+static bool g_bOpenFailed[PX_STREAM_COUNT] = { false, false, false, false };
 
 static const char * g_sStreamFile[PX_STREAM_COUNT] = {
 	"logs" PX_DIRSEP "system.log",
 	"logs" PX_DIRSEP "script.log",
-	"logs" PX_DIRSEP "debug.log"
+	"logs" PX_DIRSEP "debug.log",
+	"logs" PX_DIRSEP "console.log"
 };
 
 static int g_iJournal = -1;
@@ -73,6 +74,8 @@ static LogStream StreamFor(const char * sSubsystem) {
 		return PX_STREAM_SCRIPT;
 	} else if(strcmp(sSubsystem, PX_SUB_DEBUG) == 0) {
 		return PX_STREAM_DEBUG;
+	} else if(strcmp(sSubsystem, PX_SUB_CONSOLE) == 0) {
+		return PX_STREAM_CONSOLE;
 	}
 
 	return PX_STREAM_SYSTEM;
@@ -218,6 +221,41 @@ void LogEmit(const int iPriority, const char * sSubsystem, const char * sMsg) {
 
 void LogEmitNoAlloc(const int iPriority, const char * sSubsystem, const char * sMsg) {
 	LogEmit(iPriority, sSubsystem, sMsg);
+}
+//---------------------------------------------------------------------------
+
+void LogEmitJournal(const int iPriority, const char * sSubsystem, const char * sMsg) {
+	if(sMsg == NULL || *sMsg == '\0') {
+		return;
+	}
+
+	char sBuf[PX_LOG_BUFSIZE];
+	size_t szLen = strlen(sMsg);
+
+	if(szLen >= sizeof(sBuf)) {
+		szLen = sizeof(sBuf) - 1;
+	}
+
+	while(szLen > 0 && (sMsg[szLen - 1] == '\n' || sMsg[szLen - 1] == '\r')) {
+		szLen--;
+	}
+
+	if(szLen == 0) {
+		return;
+	}
+
+	memcpy(sBuf, sMsg, szLen);
+	sBuf[szLen] = '\0';
+
+	pthread_mutex_lock(&g_mtxLog);
+
+	if(UsingJournal() == false || PxJournalSend(iPriority, sSubsystem, sBuf, NULL, NULL) == false) {
+		WriteStderr(iPriority, sSubsystem, sBuf);
+	}
+
+	WriteFile(iPriority, sSubsystem, sBuf);
+
+	pthread_mutex_unlock(&g_mtxLog);
 }
 //---------------------------------------------------------------------------
 

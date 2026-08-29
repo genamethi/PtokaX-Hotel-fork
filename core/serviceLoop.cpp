@@ -29,6 +29,7 @@
 #include "hashRegManager.h"
 #include "hashUsrManager.h"
 #include "LanguageManager.h"
+#include "LuaConsole.h"
 #include "LuaScriptManager.h"
 #include "ProfileManager.h"
 #include "ServerManager.h"
@@ -106,6 +107,8 @@ void ServiceLoop::Looper() {
 		SendLoop();
 		EventQueue::m_Ptr->ProcessEvents();
 	}
+
+	PxConsolePoll();
 
 	if(ServerManager::m_bServerTerminated == false) {
 		m_bRecv = !m_bRecv;

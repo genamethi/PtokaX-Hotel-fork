@@ -23,6 +23,7 @@
 #include "GlobalDataQueue.h"
 #include "LanguageManager.h"
 #include "logging.h"
+#include "LuaConsole.h"
 #include "LuaScriptManager.h"
 #include "sdlisten.h"
 #include "sdnotify.h"
@@ -200,6 +201,8 @@ int main(int argc, char* argv[]) {
 
 	LogEmitFormat(PX_LOG_INFO, PX_SUB_HUB, "%s running", g_sPtokaXTitle);
 
+	PxConsoleInit();
+
 	PxReportUnclaimedFds();
 
 	{
@@ -310,6 +313,8 @@ int main(int argc, char* argv[]) {
 	
 	    nanosleep(&sleeptime, NULL);
 	}
+
+	PxConsoleClose();
 
 	LogEmitFormat(PX_LOG_INFO, PX_SUB_HUB, "%s ending", g_sPtokaXTitle);
 

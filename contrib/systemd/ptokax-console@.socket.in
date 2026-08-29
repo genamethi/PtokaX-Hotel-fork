@@ -1,0 +1,30 @@
+# Optional: a Lua console for one instance.
+#
+# Write a Lua chunk into the socket and close it. The hub evaluates the chunk
+# against a fresh state carrying the full hub API, and print output and errors
+# go to the journal.
+#
+#   systemctl enable --now ptokax-console@main.socket
+#
+#   socat - UNIX-CONNECT:/run/ptokax/main-console.sock < chunk.lua
+#   journalctl PTOKAX_SUBSYSTEM=console -f
+#
+# The socket is root-only as shipped. console-access.conf.example opens it to a
+# group. Read what that grants before applying it.
+#
+# A chunk that never returns blocks the whole hub, and SIGTERM will not recover
+# it. That limit is the same one Lua scripts have.
+
+[Unit]
+Description=PtokaX Lua console socket -- instance %i
+PartOf=ptokax@%i.service
+
+[Socket]
+ListenStream=/run/ptokax/%i-console.sock
+SocketMode=0600
+FileDescriptorName=console
+Service=ptokax@%i.service
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
