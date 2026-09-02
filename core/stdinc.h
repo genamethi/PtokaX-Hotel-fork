@@ -105,14 +105,11 @@
 	#include <endian.h>
 #endif
 #include "pxstring.h"
-//---------------------------------------------------------------------------
-// configure supplies PACKAGE_VERSION; this fallback keeps a bare compiler invocation
-// working and must be kept in step with PACKAGE_VERSION in configure.
 #ifndef PACKAGE_VERSION
-	#define PACKAGE_VERSION "0.5.3.1-hotel-fork"
+	#define PACKAGE_VERSION "0.5.3.2-hotel-fork"
 #endif
 #define PtokaXVersionString PACKAGE_VERSION
-#define BUILD_NUMBER "567"
+#define BUILD_NUMBER "001" //Not sure if I'll use this yet.
 const char g_sPtokaXTitle[] = "PtokaX DC Hub " PtokaXVersionString
 #ifdef _PtokaX_TESTING_
 	" [build " BUILD_NUMBER "]";

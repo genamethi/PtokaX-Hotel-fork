@@ -1,5 +1,9 @@
-PtokaX 0.5.3.1 - Hotel fork
+PtokaX 0.5.3.2 - Hotel fork
 ---------------------------
+
+Very early on trying to change things up. Probably should use a different versioning
+approach. Main changes are discoverable via the ptokaxctl interface. Just check the
+ADMIN-GUIDE. I've tried to keep it short and sensible.
 
 This is PtokaX version without gui able to run from console or as windows service.
 You can use for that version config files from gui version of PtokaX or you can create own config files, see examples in cfg.example directory.
