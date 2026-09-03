@@ -7,6 +7,8 @@ to write. Any editor with an LSP client works.
 
   ptokax-api.lua        generated definitions, do not edit
   gen-api-defs.lua      regenerates them from scripting-interface.txt
+  console.lua           client for the hub's Lua console socket
+  px_keymaps.lua        the keymaps below, calling console.lua
   luarc.json.example    LuaLS - Look up "workspace.library LuaLS"
 
 
@@ -22,18 +24,32 @@ You can just change the workspace.library path yourself, as well.
 
 ~/.config/nvim
 ├── lua
-│   └── pxapi
-│       ├── gen-api-defs.lua
-│       └── ptokax-api.lua
+│   ├── config
+│   │   └── px_keymaps.lua
+│   ├── pxapi
+│   │   ├── console.lua
+│   │   ├── gen-api-defs.lua
+│   │   └── ptokax-api.lua
+│   └── utils.lua
 ├── README
 └── .luarc.json
 
+Keymaps:
+
+	<leader>ps	send the buffer, or visual mode selection
+	<leader>pl	send the line
+	<leader>pp	list the hub's scripts, attach to one
+	<leader>pj	journal in a terminal split
+	<leader>pi	choose a different hub
+	<leader>pd	detach buffer
+
+Uppercase variants cache sudo.
 
 Event functions need annotating
 -------------------------------
 
-The server does not take parameter types from the declared global, so tUser is
-unknown until you specify as such. 
+LuaLS doesn't do parameter types from global, so tUser is
+unknown until specified: 
 
 	--- @param tUser User
 	--- @param sData string
@@ -69,6 +85,3 @@ signature help shows first. Core.GetOnlineUsers has four.
 Functions taking sNick/sIP alternatives are typed from the first name only,
 so BanMan.GetBan is string either way.
 
-Nil checking is strict on field access, so Core.GetUser("bob").sNick is an
-error until you test the result. It is lenient about passing a string? into a
-string parameter (LuaLS behavior).

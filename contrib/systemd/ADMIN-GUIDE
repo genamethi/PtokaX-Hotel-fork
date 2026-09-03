@@ -101,8 +101,11 @@ socket comes up with sockets.target at boot.
 Write a chunk, close the socket. Each connection gets a new state, so globals
 do not survive between chunks. Settings and registrations do.
 
-The socket is root-only. A chunk runs as the hub user and has os.execute, so
-console-access.conf.example grants more than push does.
+If using socat, for send + receive use -t flag for timing issues.
+
+	socat -t5 - UNIX-CONNECT:/run/ptokax/PXdev-console.sock < chunk.lua
+
+The socket is root-only. 
 
 A chunk that never returns blocks the hub the same way a script does, and only
 SIGKILL ends it.

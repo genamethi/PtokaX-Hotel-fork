@@ -537,11 +537,15 @@ end
 --- allowed and still valid. The password goes over stdin, never into argv.
 --- @param cmd string
 --- @param opts? table cache: reuse and refresh sudo's timestamp
---- @return boolean
+--- @return boolean ok
+--- @return string? stdout
 M.sudo_sh = function(cmd, opts)
 	opts = opts or {}
-	if opts.cache and vim.system({ "sudo", "-n", "sh", "-c", cmd }):wait().code == 0 then
-		return true
+	if opts.cache then
+		local cached = vim.system({ "sudo", "-n", "sh", "-c", cmd }):wait()
+		if cached.code == 0 then
+			return true, cached.stdout
+		end
 	end
 	vim.fn.inputsave()
 	local password = vim.fn.inputsecret("sudo password: ")
@@ -560,7 +564,80 @@ M.sudo_sh = function(cmd, opts)
 		M.warn("%s", vim.trim(res.stderr or "") ~= "" and vim.trim(res.stderr) or "sudo failed")
 		return false
 	end
-	return true
+	return true, res.stdout
+end
+
+--- Send to a unix stream socket and read the reply, elevating only when the
+--- socket denies access
+--- @param path string
+--- @param text string
+--- @param opts? table sudo: skip the unprivileged attempt, timeout: reply ms
+--- @return string?
+M.socket_query = function(path, text, opts)
+	opts = opts or {}
+	if not path or not vim.uv.fs_stat(path) then
+		M.warn("no such socket: %s", tostring(path))
+		return nil
+	end
+	if not text or #text == 0 then
+		M.warn("nothing to send")
+		return nil
+	end
+	if not opts.sudo then
+		local pipe = vim.uv.new_pipe(false)
+		local chunks, cerr, done = {}, nil, false
+		pipe:connect(path, function(err)
+			if err then
+				cerr, done = err, true
+				return
+			end
+			pipe:read_start(function(rerr, data)
+				if rerr or not data then
+					done = true
+					return
+				end
+				chunks[#chunks + 1] = data
+			end)
+			pipe:write(text, function()
+				pipe:shutdown()
+			end)
+		end)
+		vim.wait(opts.timeout or 5000, function()
+			return done
+		end, 10)
+		pcall(function()
+			pipe:close()
+		end)
+		if not cerr then
+			return table.concat(chunks)
+		end
+		if not tostring(cerr):match("EACCES") and not tostring(cerr):match("EPERM") then
+			M.warn("%s: %s", path, tostring(cerr))
+			return nil
+		end
+	end
+	if vim.fn.executable("socat") == 0 then
+		M.warn("socat is required to read from a root owned socket")
+		return nil
+	end
+	local tmpfile = vim.fn.tempname()
+	local fd = io.open(tmpfile, "w")
+	if not fd then
+		M.warn("cannot write %s", tmpfile)
+		return nil
+	end
+	fd:write(text)
+	fd:close()
+	vim.uv.fs_chmod(tmpfile, 384)
+	-- -t keeps socat reading after it closes its own write side, long enough for
+	-- an attached chunk to finish
+	local inner = string.format("socat -t5 - UNIX-CONNECT:%s < %s", path, tmpfile)
+	local ok, out = M.sudo_sh(inner, { cache = opts.cache })
+	vim.fn.delete(tmpfile)
+	if not ok then
+		return nil
+	end
+	return out or ""
 end
 
 --- Run a command in a terminal split

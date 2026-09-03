@@ -43,6 +43,10 @@ jlog() {
 
 send() { printf '%s' "$1" | socat - UNIX-CONNECT:"$SOCK" 2>/dev/null || :; sleep 1; }
 
+# -t keeps socat reading after it closes its own write side, long enough
+# for an attached chunk to finish
+ask() { printf '%s\n' "$1" | socat -t5 - UNIX-CONNECT:"$SOCK" 2>/dev/null || :; }
+
 cleanup() {
 	systemctl stop "$SOCKET" "$SERVICE" "ptokax-console@$INST.socket" >/dev/null 2>&1 || :
 	systemctl reset-failed "$SOCKET" "$SERVICE" "ptokax-console@$INST.socket" >/dev/null 2>&1 || :
@@ -118,6 +122,14 @@ if grep -qE '^[[:space:]]*TCPPorts[[:space:]]*=' "$statedir/cfg/Settings.pxt" 2>
 else
 	printf 'TCPPorts\t=\t%s\n' "$port" >> "$statedir/cfg/Settings.pxt"
 fi
+cat > "$statedir/scripts/pxtest.lua" <<'PXTEST'
+px_test_marker = "pxtest-alive"
+
+function PxTestSum(a, b)
+	return a + b
+end
+PXTEST
+
 chown -R --reference="$statedir" "$statedir"
 
 say "port $port, state $statedir"
@@ -237,6 +249,154 @@ if jlog | grep -q "leaked:nil"; then
 	ok "each connection gets a fresh state"
 else
 	bad "each connection gets a fresh state"
+fi
+
+#---------------------------------------------------------------------- directives
+
+say ""
+say "directives"
+
+# CheckForNewScripts adds a file it has not seen disabled, so it needs starting
+mark
+send 'print("start:" .. tostring(ScriptMan.StartScript("pxtest.lua")))'
+if jlog | grep -q "start:true"; then
+	ok "the test script started"
+else
+	bad "the test script started"
+fi
+
+reply=$(ask 'print("bare chunk")')
+if [ -z "$reply" ]; then
+	ok "a bare chunk still gets no reply"
+else
+	bad "a bare chunk still gets no reply (got $reply)"
+fi
+
+row=$(ask '--!px list' | awk -F'\t' '$1 == "pxtest.lua" { print; exit }')
+if [ -n "$row" ]; then
+	ok "list has a row for the running script"
+else
+	bad "list has a row for the running script"
+fi
+
+state=$(printf '%s' "$row" | cut -f2)
+if [ "$state" = enabled ]; then
+	ok "the row reports it enabled"
+else
+	bad "the row reports it enabled (got ${state:-none})"
+fi
+
+path=$(printf '%s' "$row" | cut -f4)
+if [ -n "$path" ] && [ -f "$path" ]; then
+	ok "the row carries a path that exists"
+else
+	bad "the row carries a path that exists (got ${path:-none})"
+fi
+
+printf 'px_late = 1\n' > "$statedir/scripts/pxlate.lua"
+chown --reference="$statedir" "$statedir/scripts/pxlate.lua"
+
+if ask '--!px list' | grep -q '^pxlate\.lua'; then
+	bad "a file added since start is absent until the hub looks again"
+else
+	ok "a file added since start is absent until the hub looks again"
+fi
+
+send 'ScriptMan.Refresh()'
+
+if ask '--!px list' | grep -q '^pxlate\.lua'; then
+	ok "ScriptMan.Refresh puts it in the list"
+else
+	bad "ScriptMan.Refresh puts it in the list"
+fi
+
+reply=$(ask 'px_attached = 41 + 1
+--!px attach pxtest.lua')
+if [ "$reply" = ok ]; then
+	ok "attach replies ok"
+else
+	bad "attach replies ok (got ${reply:-none})"
+fi
+
+# the assert carries the check, so this does not depend on where print goes
+reply=$(ask 'assert(px_attached == 42, "got " .. tostring(px_attached))
+--!px attach pxtest.lua')
+if [ "$reply" = ok ]; then
+	ok "a global set by one attach survives to the next"
+else
+	bad "a global set by one attach survives to the next (got ${reply:-none})"
+fi
+
+reply=$(ask 'assert(px_test_marker == "pxtest-alive")
+assert(PxTestSum(1, 2) == 3)
+--!px attach pxtest.lua')
+if [ "$reply" = ok ]; then
+	ok "attach reaches what the script itself defined"
+else
+	bad "attach reaches what the script itself defined (got ${reply:-none})"
+fi
+
+reply=$(ask '--!px attach nosuch.lua')
+if [ "$reply" = "error: no such script" ]; then
+	ok "attaching to an unknown script is refused"
+else
+	bad "attaching to an unknown script is refused (got ${reply:-none})"
+fi
+
+reply=$(ask '--!px attach pxlate.lua')
+if [ "$reply" = "error: script not running" ]; then
+	ok "attaching to a disabled script is refused"
+else
+	bad "attaching to a disabled script is refused (got ${reply:-none})"
+fi
+
+reply=$(ask '--!px bogus')
+if [ "$reply" = "error: unknown directive" ]; then
+	ok "an unknown directive is refused"
+else
+	bad "an unknown directive is refused (got ${reply:-none})"
+fi
+
+mark
+reply=$(ask 'local a = 1
+local b = 2
+error("attach boom")
+--!px attach pxtest.lua')
+if printf '%s' "$reply" | grep -q '^error: .*attach boom'; then
+	ok "a runtime error under attach comes back in the reply"
+else
+	bad "a runtime error under attach comes back in the reply (got ${reply:-none})"
+fi
+
+if jlog -p err | grep -q "stack traceback"; then
+	ok "the same error logs a traceback"
+else
+	bad "the same error logs a traceback"
+fi
+
+if jlog -p err | grep -q "console:3:"; then
+	ok "the traceback line number is the line the client sent"
+else
+	bad "the traceback line number is the line the client sent"
+fi
+
+reply=$(ask 'assert(px_attached == 42)
+--!px attach pxtest.lua')
+if [ "$reply" = ok ]; then
+	ok "the error left the script running with its state intact"
+else
+	bad "the error left the script running with its state intact (got ${reply:-none})"
+fi
+
+# -u closes the read side, so the hub replies to nobody
+printf 'px_noread = 1\n--!px attach pxtest.lua\n' |
+	socat -u - UNIX-CONNECT:"$SOCK" >/dev/null 2>&1 || :
+sleep 1
+
+if systemctl is-active --quiet "$SERVICE"; then
+	ok "a client that never reads the reply leaves the hub healthy"
+else
+	bad "a client that never reads the reply leaves the hub healthy"
 fi
 
 #--------------------------------------------------------------------- the edges
