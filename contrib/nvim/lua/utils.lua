@@ -629,8 +629,6 @@ M.socket_query = function(path, text, opts)
 	fd:write(text)
 	fd:close()
 	vim.uv.fs_chmod(tmpfile, 384)
-	-- -t keeps socat reading after it closes its own write side, long enough for
-	-- an attached chunk to finish
 	local inner = string.format("socat -t5 - UNIX-CONNECT:%s < %s", path, tmpfile)
 	local ok, out = M.sudo_sh(inner, { cache = opts.cache })
 	vim.fn.delete(tmpfile)

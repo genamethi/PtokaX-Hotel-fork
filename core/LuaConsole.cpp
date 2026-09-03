@@ -208,7 +208,6 @@ static void ConsoleReplyMode(const int iFd) {
 }
 //---------------------------------------------------------------------------
 
-// a client that never reads costs the send timeout and nothing more
 static void ConsoleWrite(const int iFd, const char * sMsg) {
 	const size_t szLen = strlen(sMsg);
 
@@ -229,8 +228,6 @@ static void ConsoleWrite(const int iFd, const char * sMsg) {
 }
 //---------------------------------------------------------------------------
 
-// the directive is the last line and a Lua comment, so it stays in the chunk and
-// every line number a traceback reports is the line the client sent
 static bool ConsoleDirective(const char * sBuf, const size_t szLen, char * sVerb,
 	const size_t szVerbMax, char * sArg, const size_t szArgMax) {
 	static const char sMark[] = "--!px";
@@ -263,7 +260,6 @@ static bool ConsoleDirective(const char * sBuf, const size_t szLen, char * sVerb
 
 	size_t szi = 0;
 
-	// an over long verb is consumed whole, so its tail cannot reach the argument
 	while(szPos < szEnd && sBuf[szPos] != ' ' && sBuf[szPos] != '\t') {
 		if(szi + 1 < szVerbMax) {
 			sVerb[szi++] = sBuf[szPos];
@@ -338,7 +334,6 @@ static bool ConsoleEvalIn(Script * pScript, const char * sChunk, const size_t sz
 
 	bool bOk = true;
 
-	// a console typo must not reach ScriptError, which can stop a script
 	if(luaL_loadbuffer(pLua, sChunk, szChunk, "=console") != 0 ||
 		lua_pcall(pLua, 0, 0, iTraceback) != 0) {
 		const char * sMsg = lua_tostring(pLua, -1);
@@ -359,7 +354,6 @@ static bool ConsoleEvalIn(Script * pScript, const char * sChunk, const size_t sz
 		bOk = false;
 	}
 
-	// the state is a running script's, so leave its stack as it was found
 	lua_settop(pLua, iTop);
 
 	return bOk;
@@ -496,8 +490,6 @@ void PxConsolePoll() {
 			bDrop = true;
 		}
 
-		// a directive replies, so the fd and the buffer both leave the slot and
-		// outlive the connection record
 		char * sChunk = bDrop == false ? pConn->sBuf : NULL;
 		const size_t szChunk = bDrop == false ? pConn->szLen : 0;
 

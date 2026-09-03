@@ -1,0 +1,63 @@
+#!/bin/sh
+set -eu
+
+self=${0##*/}
+
+usage() {
+	cat >&2 <<USAGE
+usage: $self <instance> list
+       $self <instance> attach <script> [file]
+       $self <instance> eval [file]
+
+	list		one row per script: name, enabled, KiB, path
+	attach		run the chunk in that script's own Lua state
+	eval		run the chunk in a fresh state, output in the journal
+
+	file defaults to stdin. sudo unless the socket has a SocketGroup.
+
+	$self PXdev list
+	$self PXdev attach bot.lua probe.lua
+	echo 'print(Core.Version)' | $self PXdev eval
+	journalctl PTOKAX_SUBSYSTEM=console -f
+USAGE
+	exit 2
+}
+
+[ $# -ge 2 ] || usage
+
+instance=$1
+verb=$2
+shift 2
+
+command -v socat >/dev/null 2>&1 || { printf '%s: socat is required\n' "$self" >&2; exit 1; }
+
+sock=/run/ptokax/$instance-console.sock
+[ -S "$sock" ] || { printf '%s: no socket at %s\n' "$self" "$sock" >&2; exit 1; }
+
+case $verb in
+list)
+	[ $# -eq 0 ] || usage
+	printf -- '--!px list\n' | socat -t5 - UNIX-CONNECT:"$sock"
+	;;
+attach)
+	[ $# -ge 1 ] && [ $# -le 2 ] || usage
+	script=$1
+	reply=$({
+		cat -- "${2:--}"
+		printf -- '\n--!px attach %s\n' "$script"
+	} | socat -t5 - UNIX-CONNECT:"$sock")
+	if [ -n "$reply" ]; then
+		printf '%s\n' "$reply"
+	fi
+	case $reply in
+	error:*) exit 1 ;;
+	esac
+	;;
+eval)
+	[ $# -le 1 ] || usage
+	cat -- "${1:--}" | socat -u - UNIX-CONNECT:"$sock"
+	;;
+*)
+	usage
+	;;
+esac

@@ -1,8 +1,3 @@
--- PtokaX Lua console keymaps. Chunks go in over the socket, output comes back
--- in the journal, so <leader>pj is the other half of the loop.
---
--- Named px_keymaps so it does not collide with an existing config/keymaps.lua.
--- Either source it from there or copy the mappings across.
 local utils = require("utils")
 local console = require("pxapi.console")
 
@@ -54,7 +49,6 @@ vim.keymap.set("n", "<leader>pi", function()
   console.pick_instance()
 end, { desc = "PtokaX pick instance" })
 
--- the same prefix rule contrib/nvim/lua/pxapi/gen-api-defs.lua uses
 local ARG_TYPE = { s = "string", i = "integer", u = "integer", b = "boolean",
                    n = "number", f = "function", t = "table" }
 

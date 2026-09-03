@@ -96,7 +96,8 @@ ALL_LIBS     := $(LUA_LIBS) $(ZLIB_LIBS) $(DB_LIBS) $(TINYXML_LIBS) \
 # Build
 #*******************************************************************************
 UNIT_OUT := build/systemd/ptokax@.service build/systemd/ptokax@.socket \
-            build/systemd/ptokax-console@.socket build/systemd/pxctl
+            build/systemd/ptokax-console@.socket build/systemd/pxctl \
+            build/systemd/pxconsole
 
 .PHONY: all
 all: $(TARGET)
@@ -188,6 +189,10 @@ build/systemd/pxctl: $(UNIT_SRC)/pxctl config.mk build/systemd/.stamp-$(SYSTEMD_
 	$(call say,GEN,$@)
 	$(Q)$(UNIT_SRC)/unitgen.sh --systemd-version=$(SYSTEMD_VERSION) $(UNIT_SUBST) < $< > $@
 
+build/systemd/pxconsole: $(UNIT_SRC)/pxconsole config.mk build/systemd/.stamp-$(SYSTEMD_VERSION)
+	$(call say,GEN,$@)
+	$(Q)$(UNIT_SRC)/unitgen.sh --systemd-version=$(SYSTEMD_VERSION) $(UNIT_SUBST) < $< > $@
+
 .PHONY: install-systemd
 install-systemd: check-built
 	$(INSTALL) -d $(DESTDIR)$(systemdsystemunitdir) $(DESTDIR)$(bindir) \
@@ -197,6 +202,7 @@ install-systemd: check-built
 	$(INSTALL) -m 644 build/systemd/ptokax-console@.socket $(DESTDIR)$(systemdsystemunitdir)/
 	$(INSTALL) -m 644 $(UNIT_SRC)/ptokax.target $(DESTDIR)$(systemdsystemunitdir)/
 	$(INSTALL) -m 755 build/systemd/pxctl $(DESTDIR)$(bindir)/pxctl
+	$(INSTALL) -m 755 build/systemd/pxconsole $(DESTDIR)$(bindir)/pxconsole
 	$(INSTALL) -m 644 $(UNIT_SRC)/ptokax@.service.in $(DESTDIR)$(datadir)/ptokax/systemd/
 	$(INSTALL) -m 755 $(UNIT_SRC)/unitgen.sh $(DESTDIR)$(datadir)/ptokax/systemd/
 	$(INSTALL) -m 644 $(UNIT_SRC)/README.systemd $(UNIT_SRC)/ADMIN-GUIDE $(UNIT_SRC)/*.example $(DESTDIR)$(docdir)/
@@ -217,6 +223,7 @@ check-systemd: build/systemd/ptokax@.service build/systemd/ptokax@.socket \
 uninstall:
 	rm -f $(DESTDIR)$(bindir)/$(TARGET)
 	rm -f $(DESTDIR)$(bindir)/pxctl
+	rm -f $(DESTDIR)$(bindir)/pxconsole
 	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax@.service
 	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax@.socket
 	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax-console@.socket

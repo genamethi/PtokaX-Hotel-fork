@@ -1,7 +1,3 @@
--- Client for the PtokaX Lua console socket, described in
--- contrib/systemd/ADMIN-GUIDE. A chunk goes in over the socket and output comes
--- back in the journal. Attaching runs the chunk in a named script's own state
--- instead of a fresh one.
 local utils = require("utils")
 
 local M = {}
@@ -9,7 +5,6 @@ local M = {}
 M.socket = "/run/ptokax/%s-console.sock"
 M.unit = "ptokax@%s.service"
 
--- what the picker last settled on, used by any buffer that is not attached
 M.instance = nil
 
 local function sock(instance)
@@ -56,13 +51,11 @@ function M.with_instance(cb)
   M.select_instance(cb)
 end
 
---- Forget the current instance and choose again
 function M.pick_instance()
   M.instance = nil
   M.select_instance(function(instance) utils.info("instance: %s", instance) end)
 end
 
---- Follow the console output of the current instance
 function M.journal()
   M.with_instance(function(instance)
     utils.term_split({
@@ -83,8 +76,6 @@ local function parse(out)
   return rows
 end
 
---- Copy a script out of the hub tree and open it. The copy is for reading and
---- for sending, pxctl push is still how a script gets back to the hub.
 --- @param opts? table cache: reuse sudo's timestamp
 function M.load(instance, row, opts)
   local ok, body = utils.sudo_sh(string.format("cat %s", vim.fn.shellescape(row.path)), opts)
@@ -102,7 +93,6 @@ function M.load(instance, row, opts)
   attach(instance, row.name, 0)
 end
 
---- Pick a script the hub knows about, attach to it, and offer to open it
 --- @param opts? table cache: reuse sudo's timestamp
 function M.pick(opts)
   opts = opts or {}
@@ -132,8 +122,6 @@ function M.pick(opts)
   end)
 end
 
---- Send a chunk. An attached buffer gets the attach directive appended rather
---- than prepended, so every line number stays the one on screen.
 --- @param text string
 --- @param opts? table cache: reuse sudo's timestamp
 function M.send(text, opts)

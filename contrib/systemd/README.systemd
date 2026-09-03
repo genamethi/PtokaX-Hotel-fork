@@ -9,11 +9,12 @@ Files here
   ptokax-console@.socket.in    optional: per-instance Lua console socket
   unitgen.sh                   renders the template for a target systemd version
   ptokax.target                group handle for every instance
-  pxctl                    admin front-end
+  pxctl                        admin front-end
   ptokax.sysusers.example      optional static user, one per instance
   group-access.conf.example    drop-in: group access instead of a transient UID
   no-capabilities.conf.example drop-in: drop CAP_NET_BIND_SERVICE
   console-access.conf.example  drop-in: reach the Lua console without sudo
+  pxconsole                    socat client for the console directives
   test-console.sh              exercises the console against a transient instance
 
 Install

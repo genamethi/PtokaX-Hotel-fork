@@ -105,6 +105,12 @@ If using socat, for send + receive use -t flag for timing issues.
 
 	socat -t5 - UNIX-CONNECT:/run/ptokax/PXdev-console.sock < chunk.lua
 
+For how to use the --!px list and --!px attach directives, see the socat
+implementation in pxconsole.
+
+	sudo pxconsole PXdev list
+	sudo pxconsole PXdev attach bot.lua probe.lua
+
 The socket is root-only. 
 
 A chunk that never returns blocks the hub the same way a script does, and only

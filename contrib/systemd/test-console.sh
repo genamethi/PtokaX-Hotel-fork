@@ -42,9 +42,6 @@ jlog() {
 }
 
 send() { printf '%s' "$1" | socat - UNIX-CONNECT:"$SOCK" 2>/dev/null || :; sleep 1; }
-
-# -t keeps socat reading after it closes its own write side, long enough
-# for an attached chunk to finish
 ask() { printf '%s\n' "$1" | socat -t5 - UNIX-CONNECT:"$SOCK" 2>/dev/null || :; }
 
 cleanup() {
@@ -256,7 +253,6 @@ fi
 say ""
 say "directives"
 
-# CheckForNewScripts adds a file it has not seen disabled, so it needs starting
 mark
 send 'print("start:" .. tostring(ScriptMan.StartScript("pxtest.lua")))'
 if jlog | grep -q "start:true"; then
@@ -318,7 +314,6 @@ else
 	bad "attach replies ok (got ${reply:-none})"
 fi
 
-# the assert carries the check, so this does not depend on where print goes
 reply=$(ask 'assert(px_attached == 42, "got " .. tostring(px_attached))
 --!px attach pxtest.lua')
 if [ "$reply" = ok ]; then
@@ -388,7 +383,6 @@ else
 	bad "the error left the script running with its state intact (got ${reply:-none})"
 fi
 
-# -u closes the read side, so the hub replies to nobody
 printf 'px_noread = 1\n--!px attach pxtest.lua\n' |
 	socat -u - UNIX-CONNECT:"$SOCK" >/dev/null 2>&1 || :
 sleep 1
