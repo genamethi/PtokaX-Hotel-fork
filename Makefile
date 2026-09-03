@@ -11,7 +11,6 @@
 #*******************************************************************************
 
 NOCONFIG_GOALS := clean distclean help
-
 ifeq ($(wildcard config.mk),)
   ifeq ($(filter-out $(NOCONFIG_GOALS),$(or $(MAKECMDGOALS),all)),)
     srcdir := .
@@ -97,7 +96,7 @@ ALL_LIBS     := $(LUA_LIBS) $(ZLIB_LIBS) $(DB_LIBS) $(TINYXML_LIBS) \
 # Build
 #*******************************************************************************
 UNIT_OUT := build/systemd/ptokax@.service build/systemd/ptokax@.socket \
-            build/systemd/ptokax-console@.socket build/systemd/ptokaxctl
+            build/systemd/ptokax-console@.socket build/systemd/pxctl
 
 .PHONY: all
 all: $(TARGET)
@@ -121,11 +120,11 @@ $(BUILDDIR)/%.o: $(srcdir)/%.c
 
 -include $(DEPS)
 
-$(OBJS): config.mk
+#$(OBJS): config.mk
 
-config.mk: $(srcdir)/configure
-	@echo "  config.mk is older than configure; re-running configure"
-	$(Q)eval "$(srcdir)/configure $(CONFIGURE_ARGS)"
+#config.mk: $(srcdir)/configure
+#	@echo "  config.mk is older than configure; re-running configure"
+#	$(Q)eval "$(srcdir)/configure $(CONFIGURE_ARGS)"
 
 #*******************************************************************************
 # Install
@@ -185,7 +184,7 @@ build/systemd/ptokax-console@.socket: $(UNIT_SRC)/ptokax-console@.socket.in $(UN
 	$(call say,GEN,$@)
 	$(Q)$(UNIT_SRC)/unitgen.sh --systemd-version=$(SYSTEMD_VERSION) $(UNIT_SUBST) < $< > $@
 
-build/systemd/ptokaxctl: $(UNIT_SRC)/ptokaxctl config.mk build/systemd/.stamp-$(SYSTEMD_VERSION)
+build/systemd/pxctl: $(UNIT_SRC)/pxctl config.mk build/systemd/.stamp-$(SYSTEMD_VERSION)
 	$(call say,GEN,$@)
 	$(Q)$(UNIT_SRC)/unitgen.sh --systemd-version=$(SYSTEMD_VERSION) $(UNIT_SUBST) < $< > $@
 
@@ -197,7 +196,7 @@ install-systemd: check-built
 	$(INSTALL) -m 644 build/systemd/ptokax@.socket $(DESTDIR)$(systemdsystemunitdir)/
 	$(INSTALL) -m 644 build/systemd/ptokax-console@.socket $(DESTDIR)$(systemdsystemunitdir)/
 	$(INSTALL) -m 644 $(UNIT_SRC)/ptokax.target $(DESTDIR)$(systemdsystemunitdir)/
-	$(INSTALL) -m 755 build/systemd/ptokaxctl $(DESTDIR)$(bindir)/ptokaxctl
+	$(INSTALL) -m 755 build/systemd/pxctl $(DESTDIR)$(bindir)/pxctl
 	$(INSTALL) -m 644 $(UNIT_SRC)/ptokax@.service.in $(DESTDIR)$(datadir)/ptokax/systemd/
 	$(INSTALL) -m 755 $(UNIT_SRC)/unitgen.sh $(DESTDIR)$(datadir)/ptokax/systemd/
 	$(INSTALL) -m 644 $(UNIT_SRC)/README.systemd $(UNIT_SRC)/ADMIN-GUIDE $(UNIT_SRC)/*.example $(DESTDIR)$(docdir)/
@@ -217,7 +216,7 @@ check-systemd: build/systemd/ptokax@.service build/systemd/ptokax@.socket \
 .PHONY: uninstall
 uninstall:
 	rm -f $(DESTDIR)$(bindir)/$(TARGET)
-	rm -f $(DESTDIR)$(bindir)/ptokaxctl
+	rm -f $(DESTDIR)$(bindir)/pxctl
 	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax@.service
 	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax@.socket
 	rm -f $(DESTDIR)$(systemdsystemunitdir)/ptokax-console@.socket

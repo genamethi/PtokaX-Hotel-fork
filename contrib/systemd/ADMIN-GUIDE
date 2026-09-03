@@ -19,7 +19,7 @@ ptokax@PXdev.
 SIGHUP used to terminate. It now restarts the scripts, and nothing else, so
 they can be reloaded without opening a client.
 
-	ptokaxctl reload-scripts PXdev
+	pxctl reload-scripts PXdev
 
 Same code path as ScriptMan.Restart(), so the same effects: script state is
 lost and bots re-announce. No disconnects.
@@ -34,13 +34,13 @@ Where the files went
 
 systemd creates the tree, so it is not there until create or import has run.
 
-	sudo ptokaxctl get PXdev statedir
+	sudo pxctl get PXdev statedir
 
 By default the tree sits under /var/lib/private at 0700 root and needs sudo to
 reach. See "Identity". "Working on scripts" covers editing them without it.
 
 
-ptokaxctl
+pxctl
 ---------
 
 	create <hub>			new tree seeded from cfg.example
@@ -68,13 +68,13 @@ Editing scripts in the hub's tree needs sudo for every change. Keep them
 somewhere you own instead and copy them across in one command. Only scripts/ and
 texts/ move. cfg/ never does, for the reason above.
 
-	sudo ptokaxctl set PXdev syncdir ~/.local/share/dchubs/PXdev
-	ptokaxctl push PXdev --dry-run
-	sudo ptokaxctl push PXdev
+	sudo pxctl set PXdev syncdir ~/.local/share/dchubs/PXdev
+	pxctl push PXdev --dry-run
+	sudo pxctl push PXdev
 
 Both directions need root, because the tree does. --dry-run does not.
 
-To avoid overwriting production data, ptokaxctl records what was last pushed, and
+To avoid overwriting production data, pxctl records what was last pushed, and
 prompts before overwriting anything the hub has changed since then. pull is the
 reverse. --force skips the prompting. .pxignore in the syncdir keeps files out of
 the diff entirely.

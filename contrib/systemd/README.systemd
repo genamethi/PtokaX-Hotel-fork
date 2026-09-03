@@ -9,7 +9,7 @@ Files here
   ptokax-console@.socket.in    optional: per-instance Lua console socket
   unitgen.sh                   renders the template for a target systemd version
   ptokax.target                group handle for every instance
-  ptokaxctl                    admin front-end
+  pxctl                    admin front-end
   ptokax.sysusers.example      optional static user, one per instance
   group-access.conf.example    drop-in: group access instead of a transient UID
   no-capabilities.conf.example drop-in: drop CAP_NET_BIND_SERVICE
@@ -21,7 +21,7 @@ Install
 
   ./configure --prefix=/usr && make
   sudo make install                          # binary
-  sudo make install-systemd                  # unit, target, ptokaxctl   [Phase 2]
+  sudo make install-systemd                  # unit, target, pxctl   [Phase 2]
   sudo systemctl daemon-reload
 
 Until the install-systemd target lands, render and place the unit by hand:
@@ -35,13 +35,13 @@ Until the install-systemd target lands, render and place the unit by hand:
       | sudo tee /etc/systemd/system/'ptokax@.service' >/dev/null
   sudo systemctl daemon-reload
 
-ptokaxctl carries the same @bindir@/@sysconfdir@/@datadir@/@docdir@ placeholders and is
+pxctl carries the same @bindir@/@sysconfdir@/@datadir@/@docdir@ placeholders and is
 substituted by the same install target. Running it from the source tree before then,
 override the paths in the environment:
 
-  PTOKAX_BIN=/usr/bin/PtokaX ./contrib/systemd/ptokaxctl list
+  PTOKAX_BIN=/usr/bin/PtokaX ./contrib/systemd/pxctl list
 
-push and pull shell out to rsync. Nothing else in ptokaxctl or the hub needs it, so
+push and pull shell out to rsync. Nothing else in pxctl or the hub needs it, so
 configure only warns when it is missing and push and pull check again at run time.
 
 The unit needs systemd 240 or newer for Type=exec; older systemd gets Type=simple, which
@@ -53,12 +53,12 @@ Instances
 
 One hub per instance name:
 
-  sudo ptokaxctl create main
-  sudo ptokaxctl setup main          # configuration menu; hub must be stopped
+  sudo pxctl create main
+  sudo pxctl setup main          # configuration menu; hub must be stopped
   sudo systemctl enable --now ptokax@main
 
-  ptokaxctl list
-  ptokaxctl log main -f
+  pxctl list
+  pxctl log main -f
   systemctl stop ptokax.target       # every instance at once
 
 Each instance gets its own state directory and its own UID. Instance A cannot read
@@ -155,13 +155,13 @@ Editing configuration
 PtokaX holds its settings in memory and rewrites cfg/ on every stop. Editing
 cfg/Settings.pxt under a running hub loses the edit when the hub next shuts down.
 
-  - To change settings: stop the instance, then `ptokaxctl setup <instance>`.
-  - `ptokaxctl setup` refuses to run against an active instance for this reason.
+  - To change settings: stop the instance, then `pxctl setup <instance>`.
+  - `pxctl setup` refuses to run against an active instance for this reason.
 
 Logs
 ----
 
-  ptokaxctl log main -f
+  pxctl log main -f
   journalctl PTOKAX_INSTANCE=main -p err
 
 Note that at present the hub still writes its own files under the state directory's

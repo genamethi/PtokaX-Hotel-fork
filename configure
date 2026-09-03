@@ -1001,18 +1001,18 @@ if [ "$with_systemd" = yes ]; then
     result "yes (version unknown)"
     warn \
       "systemd version undetected -- all guarded directives dropped." \
-      "Regenerate on the target with 'ptokaxctl unit regenerate'."
+      "Regenerate on the target with 'pxctl unit regenerate'."
   else
     result "yes (systemd $SYSTEMD_VERSION)"
     [ "$SYSTEMD_VERSION" -ge 240 ] || warn \
       "systemd $SYSTEMD_VERSION is below 240; unit falls back to Type=simple."
   fi
 
-  # ptokaxctl shells out to it; nothing in the hub links or calls it, so this is
-  # a heads-up and not a build dependency. ptokaxctl checks again at run time,
+  # pxctl shells out to it; nothing in the hub links or calls it, so this is
+  # a heads-up and not a build dependency. pxctl checks again at run time,
   # since it can be installed somewhere rsync is not.
   have_prog rsync || warn \
-    "rsync not found; 'ptokaxctl push' and 'ptokaxctl pull' will not run."
+    "rsync not found; 'pxctl push' and 'pxctl pull' will not run."
 else
   result "disabled"
 fi

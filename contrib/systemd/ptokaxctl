@@ -10,7 +10,7 @@ UNITDIR=${PTOKAX_UNITDIR:-/etc/systemd/system}
 TEMPLATEDIR=${PTOKAX_TEMPLATEDIR:-@datadir@/ptokax/systemd}
 SEEDDIR=${PTOKAX_SEEDDIR:-@datadir@/ptokax/cfg.example}
 CONFDIR=${PTOKAX_CONFDIR:-@sysconfdir@/ptokax}
-CTL_STATE=${PTOKAX_CTL_STATE:-/var/lib/ptokaxctl}
+CTL_STATE=${PTOKAX_CTL_STATE:-/var/lib/pxctl}
 
 # what push/pull will carry. scripts/ recurses because libs/ is on package.path and
 # dofile reaches anywhere below it; texts/ does not, because the hub reads that
@@ -517,7 +517,7 @@ sync_apply() {
 	# still-conflicted path drops out on its own with no bookkeeping.
 	mkdir -p "$CTL_STATE"
 	{
-		printf '# ptokaxctl sync manifest\n'
+		printf '# pxctl sync manifest\n'
 		printf '# hub=%s  syncdir=%s\n' "$hub" "$syncdir"
 		printf '# synced=%s\n' "$(date -Iseconds 2>/dev/null || date)"
 		while IFS= read -r p; do
