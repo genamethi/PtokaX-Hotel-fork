@@ -109,7 +109,9 @@
 	#define PACKAGE_VERSION "0.5.3.2-hotel-fork"
 #endif
 #define PtokaXVersionString PACKAGE_VERSION
-#define BUILD_NUMBER "001" //Not sure if I'll use this yet.
+// testing builds append the build number to the title; unset for a release
+#define _PtokaX_TESTING_
+#define BUILD_NUMBER "003"
 const char g_sPtokaXTitle[] = "PtokaX DC Hub " PtokaXVersionString
 #ifdef _PtokaX_TESTING_
 	" [build " BUILD_NUMBER "]";
