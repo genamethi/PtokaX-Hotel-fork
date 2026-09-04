@@ -1,0 +1,7 @@
+
+- Extend LogEmit to carry security events since fail2ban and journal-fed
+  nftables have nothing to go off of as is. 
+
+- CTM connection handling. 
+
+- m_pAntiFloodList hash alg improvement

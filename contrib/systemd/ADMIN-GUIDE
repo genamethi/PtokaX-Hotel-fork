@@ -163,3 +163,53 @@ address and turn on bind only single IP.
 The bound address comes from resolving HubAddress, so this holds when the
 address you provide is the one you bind. Behind NAT it is not, and socket
 activation covers that instead. README.systemd.
+
+
+NMDCS
+-----
+
+We use an external terminate for TLS. That's where the hub gets its IP.
+With that there are some compromises.
+	TLSEnabled		=	1
+	TLSProxyAddress		=	127.0.0.1:5411
+
+	contrib/nginx/stream.conf		nginx stream block
+	contrib/nginx/hubinfo.conf		pinger endpoint, goes in conf.d
+	contrib/nginx/nginx.service.in		unprivileged unit for a source build
+	contrib/systemd/ptokax-proxy.socket.example
+
+
+NMDCS and the hublist
+---------------------
+
+Got the idea from the github repo direct-connect/protocols to use http pinger with json.
+Check there for more info.
+
+	PingerAddresses	=	nmdcs://hub.example.com:5411;dchub://hub.example.com:411
+
+	curl -s http://hub.example.com/api/v0/hubinfo.json
+
+
+Connection flood limits
+-----------------------
+
+In order to support TLS we need to replace the functionality that PtokaX's deflood gives.
+For the most part this makes sense. Frequent hammering of the port is a firewall/IPS job.
+
+	contrib/firewall/POLICY			what to enforce, and the two hub settings
+	contrib/firewall/nftables.nft		rate limit and synproxy
+	contrib/firewall/iptables.rules		rate limit through ipset
+	contrib/firewall/pf.conf		BSD
+	contrib/firewall/firewalld.md		RHEL family
+	contrib/firewall/ufw.md			Ubuntu and Debian, partial
+
+
+Proxy install
+-------------
+
+In the contrib/nginx folder there's an implementation that should get you set
+up with TLS. The setup.sh script is really the way to go. Documentation is
+partial, but the idea is that most the QoL changes I'm doing assume you've
+added the systemd units. That means that pxctl and pxconsole are able to help
+and the setup.sh script calls upon those. It also helps with LetsEncrypt or 
+self-signing. I recommend using LE, though.

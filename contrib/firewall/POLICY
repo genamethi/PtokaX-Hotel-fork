@@ -1,0 +1,37 @@
+==========================================
+
+The real inspiration here is that PtokaX's deflood is really doing what a generic
+firewall should do. Really, building too much into the hub limits it's ability to
+adapt. So, here are some options.
+
+Ports
+-----
+
+	411	TCPPorts, bound by PtokaX
+	5411	the NMDCS port, bound by the TLS terminator
+
+The loopback address in TLSProxyAddress needs no rule. Nothing off the host can reach
+it.
+
+SYN floods
+----------
+
+isFlooder never sees a SYN flood. The kernel completes the handshake before accept()
+returns, so a half-open flood is exhausted before the hub is involved.
+
+	net.ipv4.tcp_syncookies = 1
+
+nftables adds synproxy on top of that. pf has synproxy state. The iptables and the
+frontend files below have neither.
+
+What each file covers
+---------------------
+
+	nftables.nft		rate limit, plus synproxy
+	iptables.rules		rate limit through ipset, no synproxy
+	pf.conf			rate limit through max-src-conn-rate, plus synproxy state
+	firewalld.md		rate limit through rich rules
+	ufw.md			partial, see the file
+
+An IDS reads nothing on the NMDCS port. The traffic is encrypted between the client
+and the terminator, so signature rules apply to 411 only.

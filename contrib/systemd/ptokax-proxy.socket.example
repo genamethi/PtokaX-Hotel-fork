@@ -1,0 +1,20 @@
+# The TLSProxyAddress listener, owned by systemd.
+#
+# PtokaX claims this one by FileDescriptorName rather than by port, since its address
+# is not in TCPPorts. The name must be "proxy".
+#
+# Drop it in as:
+#   /etc/systemd/system/ptokax@main.socket.d/20-proxy.conf
+#
+# ListenStream= here adds to the ports already in ptokax@.socket, so the hub gets both
+# its own ports and this one in a single unit.
+#
+#   systemctl daemon-reload
+#   systemctl restart ptokax@main.socket
+
+[Socket]
+ListenStream=127.0.0.1:5411
+FileDescriptorName=proxy
+
+# The address is loopback, so nothing off the host can send a header. Without socket
+# activation the same is achieved by TLSProxyAddress, which PtokaX binds itself.

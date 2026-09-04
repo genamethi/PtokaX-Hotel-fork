@@ -1,0 +1,26 @@
+# Same limit as nftables.nft, for installs that still run iptables.
+# See POLICY for where the numbers come from.
+#
+# hashlimit keeps the per-address counters, recent keeps the block list. Both are
+# kernel modules that ship with iptables.
+#
+#	ipset create ptokax-flooders hash:ip timeout 600
+#	ipset create ptokax-flooders6 hash:ip family inet6 timeout 600
+#	iptables-restore -n < iptables.rules
+#
+# No synproxy here. Set net.ipv4.tcp_syncookies = 1 instead.
+
+*filter
+
+# an address already over the limit stays out until its ipset entry expires
+-A INPUT -p tcp -m multiport --dports 411,5411 -m set --match-set ptokax-flooders src -j DROP
+
+# under 10 new connections per 60 seconds is accepted
+-A INPUT -p tcp -m multiport --dports 411,5411 -m conntrack --ctstate NEW \
+	-m hashlimit --hashlimit-name ptokax --hashlimit-mode srcip \
+	--hashlimit-above 10/minute --hashlimit-burst 10 \
+	-j SET --add-set ptokax-flooders src --exist
+
+-A INPUT -p tcp -m multiport --dports 411,5411 -m set --match-set ptokax-flooders src -j DROP
+
+COMMIT

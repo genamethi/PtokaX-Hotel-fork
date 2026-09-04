@@ -1,0 +1,83 @@
+# nginx built from source, for hubs that need the stream module a distro package
+# omits. A distro nginx package ships its own unit; this replaces it only when the
+# packaged binary has no --with-stream.
+#
+# Runs unprivileged. The NMDCS port is above 1024, so no capability is needed at
+# all; see the capability note below if you move it to 411 or 443.
+#
+# Rendered by unitgen.sh, same as the PtokaX units. Do not install directly.
+
+[Unit]
+Description=nginx terminating NMDCS for PtokaX
+Documentation=file:@docdir@/ADMIN-GUIDE
+After=network.target
+Wants=ptokax.target
+
+[Service]
+Type=forking
+User=@NGINXUSER@
+Group=@NGINXUSER@
+
+# nginx is compiled for a pid path the user cannot write, so it is overridden on the
+# command line together with the directory systemd creates for it.
+RuntimeDirectory=nginx
+PIDFile=/run/nginx/nginx.pid
+# client_body_temp and proxy_temp
+StateDirectory=nginx
+LogsDirectory=nginx
+
+ExecStartPre=@NGINXBIN@ -t -g 'pid /run/nginx/nginx.pid; error_log stderr;'
+ExecStart=@NGINXBIN@ -g 'pid /run/nginx/nginx.pid; error_log stderr;'
+ExecReload=@NGINXBIN@ -s reload -g 'pid /run/nginx/nginx.pid; error_log stderr;'
+ExecStop=@NGINXBIN@ -s quit -g 'pid /run/nginx/nginx.pid; error_log stderr;'
+
+Restart=on-failure
+RestartSec=5s
+KillMode=mixed
+TimeoutStopSec=30s
+
+SyslogIdentifier=nginx-ptokax
+LimitNOFILE=65536
+
+# --- privilege --------------------------------------------------------------
+# Nothing is retained. A port below 1024 needs these two instead:
+#   CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+#   AmbientCapabilities=CAP_NET_BIND_SERVICE
+# The `user` directive in nginx.conf only applies to a root master and warns here,
+# so leave it out of the config this unit runs.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+UMask=0077
+
+# --- filesystem -------------------------------------------------------------
+# The hub state directory holds hubinfo.json, which nginx serves and never writes.
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=@STATEDIR@
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateMounts=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RemoveIPC=yes
+KeyringMode=private
+ProtectHostname=yes            #@since 242
+RestrictSUIDSGID=yes           #@since 242
+ProtectKernelLogs=yes          #@since 244
+ProtectClock=yes               #@since 245
+ProtectProc=invisible          #@since 247
+
+# --- kernel and syscalls ----------------------------------------------------
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# MemoryDenyWriteExecute is absent: it breaks the PCRE JIT nginx uses.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

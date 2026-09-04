@@ -122,9 +122,10 @@ layout.
   Mach/Haiku/Solaris/BSD, and the global title constant. New platform conditionals belong there.
 - `skein/src/` is the only Skein directory that matters; the sibling directories
   (`Reference_Implementation`, `Additional_Implementations`, `KAT_MCT`) are upstream ballast.
-- Logging currently goes through `AppendLog` / `AppendDebugLog` / `AppendDebugLogFormat` in
-  `core/utility.cpp` writing to files under the config dir. `init_hitlist` sketches the planned
-  rework to a single priority-tagged sink usable by journald — read it before touching logging.
+- Logging goes through `LogEmit` / `LogEmitFormat` / `LogEmitField` in `core/logging.cpp`,
+  which reaches journald when running under systemd and the `logs/` directory otherwise.
+  `AppendLog` / `AppendDebugLog` / `AppendDebugLogFormat` in `core/utility.cpp` are the
+  older path and still carry most call sites.
 
 ## Comments
 
