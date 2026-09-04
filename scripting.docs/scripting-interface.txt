@@ -293,6 +293,8 @@ bOperator		- User have operator status.
 bUserCommand	- User support UserCommands protocol extension.
 bQuickList		- User support QuickList protocol extension.
 bSuspiciousTag	- User have suspicious tag.
+bSecure			- User connection is encrypted.
+sTLSVersion		- User TLS version or nil when connection is not encrypted.
 
 iShareSize		- User share size.
 iHubs			- User hubs count (from tag).
@@ -524,6 +526,7 @@ SetMan.tBooleans.LogScriptErrors		-	Save script errors to log.
 SetMan.tBooleans.DisallowBadSupports	-	Disallow clients sending buggy supports.
 SetMan.tBooleans.HashPasswords			-	Hash registered users passwords.
 SetMan.tBooleans.EnableDatabase			-	Enable/Disable database support.
+SetMan.tBooleans.TLSEnabled				-	Enable/Disable TLS proxy listener.
 
 
 Setting number IDs for SetMan.(G/S)etNumber
@@ -695,6 +698,8 @@ SetMan.tStrings.MySQLPort					-	MySQL port.
 SetMan.tStrings.MySQLDBName					-	MySQL database name.
 SetMan.tStrings.MySQLUser					-	MySQL database user.
 SetMan.tStrings.MySQLPass					-	MySQL database password.
+SetMan.tStrings.TLSProxyAddress				-	TLS proxy listener address and port.
+SetMan.tStrings.PingerAddresses				-	Hub addresses for pinger endpoint.
 
 
 User data IDs for Core.GetUserData and Core.GetUserValue call.
@@ -743,6 +748,8 @@ User data IDs for Core.GetUserData and Core.GetUserValue call.
 41	- iScriptediShareSizeShort
 42	- iScriptediShareSizeLong
 43	- tIPs
+44	- bSecure
+45	- sTLSVersion
 
 
 User info IDs for Core.SetUserInfo call.

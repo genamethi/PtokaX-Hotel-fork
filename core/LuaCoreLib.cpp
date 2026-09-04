@@ -1373,6 +1373,20 @@ static int GetUserData(lua_State * pLua) {
         lua_rawset(pLua, 1);
         break;
       }
+      case 44:
+        lua_pushliteral(pLua, "bSecure");
+        (u->m_ui32BoolBits & User::BIT_SECURE) == User::BIT_SECURE ? lua_pushboolean(pLua, 1) : lua_pushboolean(pLua, 0);
+        lua_rawset(pLua, 1);
+        break;
+      case 45:
+        lua_pushliteral(pLua, "sTLSVersion");
+        if(u->m_sTLSVersion[0] != '\0') {
+          lua_pushstring(pLua, u->m_sTLSVersion);
+        } else {
+          lua_pushnil(pLua);
+        }
+        lua_rawset(pLua, 1);
+        break;
       default:
         luaL_error(pLua, "bad argument #%d to 'GetUserData' (it's not valid id)", i);
         lua_settop(pLua, 0);
@@ -1712,6 +1726,16 @@ static int GetUserValue(lua_State * pLua) {
 
         break;
       }
+      case 44:
+        (u->m_ui32BoolBits & User::BIT_SECURE) == User::BIT_SECURE ? lua_pushboolean(pLua, 1) : lua_pushboolean(pLua, 0);
+        break;
+      case 45:
+        if(u->m_sTLSVersion[0] != '\0') {
+          lua_pushstring(pLua, u->m_sTLSVersion);
+        } else {
+          lua_pushnil(pLua);
+        }
+        break;
       default:
         luaL_error(pLua, "bad argument #%d to 'GetUserValue' (it's not valid id)", i);
         lua_pushnil(pLua);

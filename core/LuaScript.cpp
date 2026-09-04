@@ -308,6 +308,7 @@ static void AddSettingIds(lua_State * pLua) {
 #if defined(_WITH_SQLITE) || defined(_WITH_POSTGRES) || defined(_WITH_MYSQL)
 		SETBOOL_ENABLE_DATABASE,
 #endif
+		SETBOOL_TLS_ENABLED,
 	};
 
 	const char * pBoolsNames[] = { "AntiMoGlo", "AutoStart", "RedirectAll", "RedirectWhenHubFull", "AutoReg", "RegOnly",
@@ -324,6 +325,7 @@ static void AddSettingIds(lua_State * pLua) {
 #if defined(_WITH_SQLITE) || defined(_WITH_POSTGRES) || defined(_WITH_MYSQL)
 		"EnableDatabase",
 #endif
+		"TLSEnabled",
 	};
 
 	for(uint8_t ui8i = 0; ui8i < sizeof(ui8Bools); ui8i++) {
@@ -414,6 +416,7 @@ static void AddSettingIds(lua_State * pLua) {
 #elif _WITH_MYSQL
 		SETTXT_MYSQL_HOST, SETTXT_MYSQL_PORT, SETTXT_MYSQL_DBNAME, SETTXT_MYSQL_USER, SETTXT_MYSQL_PASS,
 #endif
+		SETTXT_TLS_PROXY_ADDRESS, SETTXT_PINGER_ADDRESSES,
 	};
 
 	const char * pStringsNames[] = { "HubName", "AdminNick", "HubAddress", "TCPPorts", "UDPPort", "HubDescription", "MainRedirectAddress",
@@ -428,6 +431,7 @@ static void AddSettingIds(lua_State * pLua) {
 #elif _WITH_MYSQL
 		"MySQLHost", "MySQLPort", "MySQLDBName", "MySQLUser", "MySQLPass",
 #endif
+		"TLSProxyAddress", "PingerAddresses",
 	};
 
 	for(uint8_t ui8i = 0; ui8i < sizeof(ui8Strings); ui8i++) {
@@ -945,6 +949,18 @@ void ScriptPushUserExtended(lua_State * pLua, User * pUser, const int iTable) {
 
 	lua_pushliteral(pLua, "bOperator");
 	(pUser->m_ui32BoolBits & User::BIT_OPERATOR) == User::BIT_OPERATOR ? lua_pushboolean(pLua, 1) : lua_pushboolean(pLua, 0);
+	lua_rawset(pLua, iTable);
+
+	lua_pushliteral(pLua, "bSecure");
+	(pUser->m_ui32BoolBits & User::BIT_SECURE) == User::BIT_SECURE ? lua_pushboolean(pLua, 1) : lua_pushboolean(pLua, 0);
+	lua_rawset(pLua, iTable);
+
+	lua_pushliteral(pLua, "sTLSVersion");
+	if(pUser->m_sTLSVersion[0] != '\0') {
+		lua_pushstring(pLua, pUser->m_sTLSVersion);
+	} else {
+		lua_pushnil(pLua);
+	}
 	lua_rawset(pLua, iTable);
 
 	lua_pushliteral(pLua, "bUserCommand");
