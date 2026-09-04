@@ -309,8 +309,8 @@ step_state() {
 		hub_tree_ok || { echo "systemd does not know $HUB"; return; }
 		_d=$(hub_state_dir)
 		grep -q '^TLSEnabled[[:space:]]*=[[:space:]]*1' "$_d/cfg/Settings.pxt" 2>/dev/null && { echo done; return; }
-		# without the console there is no way in from here, and the admin has
-		# their own: the Lua API, or the file with the hub stopped
+		# nothing here can reach a running hub without the console. Loading an
+		# edited file into one is a script's job, not this one's.
 		if hub_running && ! console_up; then
 			echo manual
 			return
@@ -505,9 +505,6 @@ hub_setting_chunk() {
 	printf 'SetMan.Save()\n'
 }
 
-# Settings are never hand edited while the hub runs: it rewrites cfg/ from
-# memory on shutdown. Stopped, the file is written. Running, SetMan goes over
-# the console socket.
 run_console() {
 	if hub_running; then
 		say "  systemd will not enable a socket whose service is already up,"
@@ -527,6 +524,10 @@ run_console() {
 	say "  socat - UNIX-CONNECT:/run/ptokax/$HUB-console.sock"
 }
 
+# The hub does not reread cfg/, and writes its in memory values over it on
+# shutdown, so a file edit only survives if something loads it into the running
+# hub. This script writes the file when the hub is stopped and goes through
+# SetMan over the console when it is running.
 run_hub() {
 	if hub_running; then run_hub_console; else run_hub_file; fi
 }
