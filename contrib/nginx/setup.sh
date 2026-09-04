@@ -13,7 +13,7 @@ self=${0##*/}
 here=$(cd "$(dirname "$0")" && pwd)
 
 VARS='NGINX_PREFIX NGINX_USER NGINX_MODE BUILD_DIR TLS_PORT PROXY_ADDR TCP_PORT
-      HUB STATE_DIR HUB_ADDR CERT_METHOD CERT KEY STREAM_DIR CONFD_DIR USE_SYSTEMD'
+      HUB STATE_DIR HUB_ADDR CERT_METHOD CERT KEY CERT_CUSTOM STREAM_DIR CONFD_DIR USE_SYSTEMD'
 
 set_defaults() {
 	NGINX_PREFIX=/usr/local/nginx
@@ -26,9 +26,10 @@ set_defaults() {
 	HUB=
 	STATE_DIR=
 	HUB_ADDR=hub.example.com
-	CERT_METHOD=selfsigned
-	CERT=/etc/ssl/ptokax/hub.example.com/hub.crt
-	KEY=/etc/ssl/ptokax/hub.example.com/hub.key
+	CERT_METHOD=letsencrypt
+	CERT=/etc/letsencrypt/live/hub.example.com/fullchain.pem
+	KEY=/etc/letsencrypt/live/hub.example.com/privkey.pem
+	CERT_CUSTOM=no
 	STREAM_DIR=
 	CONFD_DIR=
 	USE_SYSTEMD=auto
@@ -70,10 +71,10 @@ head2() { printf '\n  %s\n' "$1"; rule; }
 intro() { printf '  %s\n' "$1"; [ -n "${2:-}" ] && printf '  %s\n' "$2"; printf '\n'; }
 
 row() {
-	if [ -n "${4:-}" ]; then printf '    %-2s  %-16s %-24s %s\n' "$1" "$2" "$3" "$4"
-	else printf '    %-2s  %-16s %s\n' "$1" "$2" "$3"; fi
+	if [ -n "${4:-}" ]; then printf '    %-3s %-16s %-38s %s\n' "$1" "$2" "$3" "$4"
+	else printf '    %-3s %-16s %s\n' "$1" "$2" "$3"; fi
 }
-act() { printf '    %-2s  %s\n' "$1" "$2"; }
+act() { printf '    %-3s %s\n' "$1" "$2"; }
 pause() { printf '\n  enter to continue '; read -r _d || true; }
 
 edit() {
@@ -221,6 +222,7 @@ file_note() { [ -s "$1" ] && printf present || printf missing; }
 # certbot fixes its own paths and self-signed only needs a convention, so the
 # admin types paths only when pointing at files that already exist
 sync_cert_paths() {
+	[ "$CERT_CUSTOM" = yes ] && return 0
 	case $CERT_METHOD in
 		letsencrypt)
 			CERT=/etc/letsencrypt/live/$HUB_ADDR/fullchain.pem
@@ -314,9 +316,9 @@ page_plan() {
 			_n=$((_n + 1))
 			_s=$(step_state "$st")
 			case $_s in
-				done)  printf '    %-2s  %-28s %s\n' "$_n" "$(step_label "$st")" "done" ;;
-				ready) printf '    %-2s  %-28s %s\n' "$_n" "$(step_label "$st")" "will run"; _ready=$((_ready + 1)) ;;
-				*)     printf '%s    %-2s  %-28s %s%s\n' "$DIM" "$_n" "$(step_label "$st")" "$_s" "$OFF" ;;
+				done)  printf '    %-3s %-30s %s\n' "$_n" "$(step_label "$st")" "done" ;;
+				ready) printf '    %-3s %-30s %s\n' "$_n" "$(step_label "$st")" "will run"; _ready=$((_ready + 1)) ;;
+				*)     printf '%s    %-3s %-30s %s%s\n' "$DIM" "$_n" "$(step_label "$st")" "$_s" "$OFF" ;;
 			esac
 		done
 		say ""
@@ -569,8 +571,8 @@ page_nginx() {
 		head2 "1  nginx"
 		_pn_b=$(nginx_bin)
 		row a "mode"       "$NGINX_MODE"   "auto, system or prefix"
-		row b "prefix"     "$NGINX_PREFIX" "a source build installs here"
-		row c "source dir" "$BUILD_DIR"    "the git clone is kept here"
+		row b "prefix"     "$NGINX_PREFIX" "a source build goes here"
+		row c "source dir" "$BUILD_DIR"    "git clone kept here"
 		say ""
 		row "" "binary" "${_pn_b:-none found}"
 		row "" "stream" "$(nginx_has_stream && echo yes || echo no)" "required, off by default"
@@ -590,21 +592,15 @@ page_nginx() {
 }
 
 page_cert() {
-	_own='CERT_METHOD HUB_ADDR CERT KEY'
+	_own='CERT_METHOD HUB_ADDR CERT KEY CERT_CUSTOM'
 	snapshot $_own
 	while :; do
 		head2 "2  certificate"
 		row a "method" "$CERT_METHOD" "$([ "$CERT_METHOD" = letsencrypt ] && tool_note certbot)"
 		row b "domain" "$HUB_ADDR"    "name clients connect to"
-		if [ "$CERT_METHOD" = existing ]; then
-			# arbitrary paths, so they are given and shown whole
-			row c "cert" "$CERT" "$(file_note "$CERT")"
-			row d "key"  "$KEY"  "$(file_note "$KEY")"
-		else
-			row "" "directory" "$(dirname "$CERT")"
-			row "" "cert" "$(basename "$CERT")" "$(file_note "$CERT")"
-			row "" "key"  "$(basename "$KEY")"  "$(file_note "$KEY")"
-		fi
+		row c "directory" "$(dirname "$CERT")" "$([ "$CERT_CUSTOM" = yes ] && echo yours || echo derived)"
+		row d "cert"      "$(basename "$CERT")" "$(file_note "$CERT")"
+		row e "key"       "$(basename "$KEY")"  "$(file_note "$KEY")"
 		say ""
 		act p "show the keyprint"; act r "reset this page"
 		act s "return, keeping changes"; act q "return, discarding them"
@@ -613,10 +609,14 @@ page_cert() {
 			a) edit CERT_METHOD "method" "selfsigned needs no network, DC++ users must opt in" letsencrypt selfsigned existing
 			   sync_cert_paths ;;
 			b) edit HUB_ADDR "domain" ""; sync_cert_paths ;;
-			c) [ "$CERT_METHOD" = existing ] && edit CERT "cert" "full path" || say "  derived from the method and domain" ;;
-			d) [ "$CERT_METHOD" = existing ] && edit KEY "key" "full path" || say "  derived from the method and domain" ;;
+			c) _cd=$(dirname "$CERT"); edit _cd "directory" "holds both files"
+			   CERT=$_cd/$(basename "$CERT"); KEY=$_cd/$(basename "$KEY"); CERT_CUSTOM=yes ;;
+			d) _cn=$(basename "$CERT"); edit _cn "cert" "a name, or a whole path"
+			   case $_cn in /*) CERT=$_cn ;; *) CERT=$(dirname "$CERT")/$_cn ;; esac; CERT_CUSTOM=yes ;;
+			e) _kn=$(basename "$KEY"); edit _kn "key" "a name, or a whole path"
+			   case $_kn in /*) KEY=$_kn ;; *) KEY=$(dirname "$KEY")/$_kn ;; esac; CERT_CUSTOM=yes ;;
 			p) say ""; show_keyprint; pause ;;
-			r) reset_vars $_own; sync_cert_paths ;;
+			r) reset_vars $_own; CERT_CUSTOM=no; sync_cert_paths ;;
 			s) return ;;
 			q) restore; return ;;
 			*) say "  no such choice" ;;
@@ -630,11 +630,11 @@ page_hub() {
 	while :; do
 		head2 "3  hub"
 		_d=$(hub_state_dir 2>/dev/null || true)
-		row a "hub name"        "${HUB:-<none>}"        "systemd instance ptokax@<name>"
+		row a "hub name"        "${HUB:-<none>}"        "instance ptokax@<name>"
 		row b "state dir"       "${STATE_DIR:-<pxctl>}" "${_d:-unknown}"
-		row c "TLSProxyAddress" "$PROXY_ADDR"           "loopback listener the terminator feeds"
+		row c "TLSProxyAddress" "$PROXY_ADDR"           "the terminator feeds this"
 		row d "plaintext port"  "$TCP_PORT"             "first entry in TCPPorts"
-		row e "NMDCS port"      "$TLS_PORT"             "external port nginx listens on"
+		row e "NMDCS port"      "$TLS_PORT"             "nginx listens here"
 		say ""
 		row "" "hub"     "$(hub_running && echo running || echo stopped)"
 		row "" "console" "$(console_up && echo up || echo down)"
@@ -662,8 +662,8 @@ page_conf() {
 	snapshot $_own
 	while :; do
 		head2 "4  nginx config"
-		row a "stream dir" "${STREAM_DIR:-<from nginx -V>}" "stream {} is a sibling of http {}"
-		row b "conf.d dir" "${CONFD_DIR:-<from nginx -V>}"  "pinger snippet, inside http {}"
+		row a "stream dir" "${STREAM_DIR:-<from nginx -V>}" "a sibling of http {}"
+		row b "conf.d dir" "${CONFD_DIR:-<from nginx -V>}"  "inside http {}"
 		say ""
 		act r "reset this page"; act s "return, keeping changes"; act q "return, discarding them"
 		menu
