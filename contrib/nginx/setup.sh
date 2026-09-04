@@ -14,7 +14,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 
 VARS='NGINX_PREFIX NGINX_USER NGINX_MODE BUILD_DIR TLS_PORT PROXY_ADDR TCP_PORT
       HUB STATE_DIR HUB_ADDR CERT_METHOD CERT KEY CERT_CUSTOM STREAM_DIR CONFD_DIR
-      ENABLE_CONSOLE'
+      ENABLE_CONSOLE CERT_CHALLENGE'
 
 set_defaults() {
 	NGINX_PREFIX=/usr/local/nginx
@@ -30,6 +30,7 @@ set_defaults() {
 	STATE_DIR=
 	HUB_ADDR=hub.example.com
 	CERT_METHOD=letsencrypt
+	CERT_CHALLENGE=http
 	CERT=/etc/letsencrypt/live/hub.example.com/fullchain.pem
 	KEY=/etc/letsencrypt/live/hub.example.com/privkey.pem
 	CERT_CUSTOM=no
@@ -132,6 +133,16 @@ priv_write() {
 priv_cp()    { if can_write "$2"; then cp "$1" "$2"; else priv cp "$1" "$2"; fi; }
 priv_cat()   { if [ -r "$1" ]; then cat "$1"; else priv cat "$1"; fi; }
 priv_mkdir() { if can_write "$1"; then mkdir -p "$1"; else priv mkdir -p "$1"; fi; }
+priv_chmod() { _pc=$1; shift; if [ -O "$1" ] || [ "$(id -u)" -eq 0 ]; then chmod "$_pc" "$@"; else priv chmod "$_pc" "$@"; fi; }
+
+# no read -s in POSIX sh
+read_secret() {
+	printf '  %s: ' "$1"
+	stty -echo 2>/dev/null
+	read -r _secret || _secret=
+	stty echo 2>/dev/null
+	printf '\n'
+}
 priv_test_dir() {
 	if [ -d "$1" ]; then return 0
 	elif [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then sudo -n test -d "$1" 2>/dev/null
@@ -451,13 +462,15 @@ run_cert() {
 			confirm "use a self-signed certificate instead?" || return 1
 			CERT_METHOD=selfsigned; run_cert; return $?
 		fi
-		say "  certbot needs $HUB_ADDR to resolve to this host and inbound port 80"
-		say "  reachable from the internet, not just open locally"
+		if [ "$CERT_CHALLENGE" = dns ]; then
+			run_certbot_dns; return $?
+		fi
+		say "  needs $HUB_ADDR resolving here and inbound 80 from the internet"
 		confirm "run certbot?" || return 1
 		if ! priv certbot certonly --standalone -d "$HUB_ADDR"; then
 			say ""
-			say "  certbot could not prove the domain. Common causes are port 80"
-			say "  closed at the router or firewall, or the name not pointing here."
+			say "  certbot could not prove the domain over port 80."
+			say "  switching challenge to dns avoids the port entirely."
 			confirm "use a self-signed certificate for now instead?" || return 1
 			CERT_METHOD=selfsigned; CERT_CUSTOM=no; sync_cert_paths; run_cert; return $?
 		fi
@@ -480,6 +493,39 @@ run_cert() {
 		;;
 	existing) say "  using $CERT and $KEY unchanged" ;;
 	esac
+}
+
+run_certbot_dns() {
+	case $HUB_ADDR in
+	*.duckdns.org)
+		ensure_tool curl || return 1
+		read_secret "duckdns token"
+		_dd_token=$_secret; _secret=
+		[ -n "$_dd_token" ] || { say "  no token"; return 1; }
+
+		_dd_hooks=/etc/letsencrypt/duckdns
+		priv_mkdir "$_dd_hooks"
+		# the token lives in the hook, so root only
+		printf '#!/bin/sh\nexec curl -sS "https://www.duckdns.org/update?domains=${CERTBOT_DOMAIN%%%%.duckdns.org}&token=%s&txt=$CERTBOT_VALIDATION"\n' \
+			"$_dd_token" | priv_write "$_dd_hooks/auth.sh"
+		printf '#!/bin/sh\nexec curl -sS "https://www.duckdns.org/update?domains=${CERTBOT_DOMAIN%%%%.duckdns.org}&token=%s&clear=true"\n' \
+			"$_dd_token" | priv_write "$_dd_hooks/cleanup.sh"
+		priv_chmod 700 "$_dd_hooks/auth.sh" "$_dd_hooks/cleanup.sh"
+
+		confirm "run certbot with the duckdns TXT hook?" || return 1
+		priv certbot certonly --manual --preferred-challenges dns \
+			--manual-auth-hook "$_dd_hooks/auth.sh" \
+			--manual-cleanup-hook "$_dd_hooks/cleanup.sh" \
+			-d "$HUB_ADDR" || return 1
+		;;
+	*)
+		say "  certbot will print a TXT record to add for _acme-challenge.$HUB_ADDR"
+		say "  and wait. Renewal needs the same by hand unless you add a hook."
+		confirm "run certbot?" || return 1
+		priv certbot certonly --manual --preferred-challenges dns -d "$HUB_ADDR" || return 1
+		;;
+	esac
+	say "  renewal keeps the key, so the keyprint stays the same"
 }
 
 keyprint_of() {
@@ -667,7 +713,7 @@ page_nginx() {
 }
 
 page_cert() {
-	_own='CERT_METHOD HUB_ADDR CERT KEY CERT_CUSTOM'
+	_own='CERT_METHOD HUB_ADDR CERT KEY CERT_CUSTOM CERT_CHALLENGE'
 	snapshot $_own
 	while :; do
 		head2 "2  certificate"
@@ -683,6 +729,8 @@ page_cert() {
 			row c "cert" "$CERT" "$(file_note "$CERT")"
 			row d "key"  "$KEY"  "$(file_note "$KEY")"
 		fi
+		[ "$CERT_METHOD" = letsencrypt ] &&
+			row e "challenge" "$CERT_CHALLENGE" "$([ "$CERT_CHALLENGE" = http ] && echo 'needs inbound 80' || echo 'no inbound port')"
 		say ""
 		act p "show the keyprint"; act r "reset this page"
 		act s "return, keeping changes"; act q "return, discarding them"
@@ -698,6 +746,7 @@ page_cert() {
 				    [ "$(dirname "$KEY")" = "$_old" ] && KEY=$(dirname "$CERT")/$(basename "$KEY") ;;
 				*)  CERT=$(dirname "$CERT")/$_cn ;;
 			   esac; CERT_CUSTOM=yes ;;
+			e) edit CERT_CHALLENGE "challenge" "http needs inbound port 80, dns proves it with a TXT record" http dns ;;
 			d) _kn=$(basename "$KEY"); edit _kn "key" "a name, or a whole path"
 			   case $_kn in /*) KEY=$_kn ;; *) KEY=$(dirname "$KEY")/$_kn ;; esac; CERT_CUSTOM=yes ;;
 			p) say ""; show_keyprint; pause ;;
