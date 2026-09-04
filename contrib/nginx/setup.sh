@@ -27,8 +27,8 @@ set_defaults() {
 	STATE_DIR=
 	HUB_ADDR=hub.example.com
 	CERT_METHOD=selfsigned
-	CERT=/etc/ssl/ptokax/hub.crt
-	KEY=/etc/ssl/ptokax/hub.key
+	CERT=/etc/ssl/ptokax/hub.example.com/hub.crt
+	KEY=/etc/ssl/ptokax/hub.example.com/hub.key
 	STREAM_DIR=
 	CONFD_DIR=
 	USE_SYSTEMD=auto
@@ -100,7 +100,15 @@ confirm() {
 menu() { printf '\n  > '; read -r _key || _key=q; }
 
 # --- privilege --------------------------------------------------------------
-can_write() { if [ -e "$1" ]; then [ -w "$1" ]; else [ -w "$(dirname "$1")" ]; fi; }
+# For a path that does not exist yet, mkdir -p may have to create several
+# levels, so the test is the nearest ancestor that does exist.
+can_write() {
+	_cw=$1
+	while [ ! -e "$_cw" ]; do
+		case $_cw in */*) _cw=${_cw%/*}; [ -n "$_cw" ] || _cw=/ ;; *) _cw=. ;; esac
+	done
+	[ -w "$_cw" ]
+}
 
 priv() {
 	if [ "$(id -u)" -eq 0 ]; then "$@"
@@ -183,9 +191,20 @@ nginx_has_stream() {
 	printf '%s' "$_nhs_v" | grep -q -- '--with-stream' &&
 	printf '%s' "$_nhs_v" | grep -q -- '--with-stream_ssl_module'
 }
+# -V reports --conf-path only when it was given at build time. Otherwise the
+# config sits under the prefix, which is always reported.
 nginx_conf_prefix() {
 	_ncp_b=$(nginx_bin); [ -n "$_ncp_b" ] && [ -x "$_ncp_b" ] || return 1
-	"$_ncp_b" -V 2>&1 | tr ' ' '\n' | sed -n 's/^--conf-path=//p' | sed 's:/[^/]*$::'
+	_ncp_v=$("$_ncp_b" -V 2>&1) || return 1
+
+	_ncp_d=$(printf '%s' "$_ncp_v" | tr ' ' '\n' | sed -n 's/^--conf-path=//p' | sed 's:/[^/]*$::')
+	if [ -z "$_ncp_d" ]; then
+		_ncp_p=$(printf '%s' "$_ncp_v" | tr ' ' '\n' | sed -n 's/^--prefix=//p')
+		[ -n "$_ncp_p" ] && _ncp_d=$_ncp_p/conf
+	fi
+
+	[ -n "$_ncp_d" ] || return 1
+	printf '%s' "$_ncp_d"
 }
 
 hub_state_dir() {
@@ -197,6 +216,20 @@ hub_tree_ok()  { _d=$(hub_state_dir 2>/dev/null || true); [ -n "$HUB" ] && [ -n 
 hub_running()  { have_systemd && [ -n "$HUB" ] && systemctl is-active --quiet "ptokax@$HUB" 2>/dev/null; }
 console_up()   { [ -n "$HUB" ] && [ -S "/run/ptokax/$HUB-console.sock" ]; }
 cert_present() { [ -s "$CERT" ] && [ -s "$KEY" ]; }
+file_note() { [ -s "$1" ] && printf present || printf missing; }
+
+# certbot fixes its own paths and self-signed only needs a convention, so the
+# admin types paths only when pointing at files that already exist
+sync_cert_paths() {
+	case $CERT_METHOD in
+		letsencrypt)
+			CERT=/etc/letsencrypt/live/$HUB_ADDR/fullchain.pem
+			KEY=/etc/letsencrypt/live/$HUB_ADDR/privkey.pem ;;
+		selfsigned)
+			CERT=/etc/ssl/ptokax/$HUB_ADDR/hub.crt
+			KEY=/etc/ssl/ptokax/$HUB_ADDR/hub.key ;;
+	esac
+}
 
 # ============================================================================
 # steps. state prints one of: done | ready | <reason it cannot run>
@@ -369,8 +402,6 @@ run_cert() {
 		say "  $HUB_ADDR must resolve here, port 80 must be free"
 		confirm "run certbot?" || return 1
 		priv certbot certonly --standalone -d "$HUB_ADDR" || return 1
-		CERT=/etc/letsencrypt/live/$HUB_ADDR/fullchain.pem
-		KEY=/etc/letsencrypt/live/$HUB_ADDR/privkey.pem
 		say "  renewal keeps the key, so the keyprint stays the same"
 		;;
 	selfsigned)
@@ -462,7 +493,8 @@ run_hub_console() {
 
 run_conf() {
 	[ -n "$STREAM_DIR" ] || {
-		_cp=$(nginx_conf_prefix) || { say "  cannot read --conf-path"; return 1; }
+		_cp=$(nginx_conf_prefix)
+		[ -n "$_cp" ] || { say "  cannot work out the config directory, set it on page 4"; return 1; }
 		STREAM_DIR=$_cp/stream.d; CONFD_DIR=$_cp/conf.d
 	}
 	_d=$(hub_state_dir 2>/dev/null || true)
@@ -510,14 +542,21 @@ run_socket() {
 	return 0
 }
 
+# A prefix build owned by the admin needs no root to test or run, so try
+# without it and escalate only when that is what failed.
+nginx_do() {
+	"$(nginx_bin)" "$@" && return 0
+	priv "$(nginx_bin)" "$@"
+}
+
 run_start() {
-	_b=$(nginx_bin); [ -n "$_b" ] || { say "  no nginx binary"; return 1; }
-	priv "$_b" -t || { say "  config test failed"; return 1; }
+	[ -n "$(nginx_bin)" ] || { say "  no nginx binary"; return 1; }
+	nginx_do -t || { say "  config test failed"; return 1; }
 	if have_systemd && [ -f /etc/systemd/system/nginx-ptokax.service ]; then
 		priv systemctl restart nginx-ptokax &&
 		priv systemctl --no-pager --lines=3 status nginx-ptokax
-	elif priv "$_b" -s reload 2>/dev/null; then say "  reloaded"
-	else priv "$_b" && say "  started"; fi
+	elif nginx_do -s reload; then say "  reloaded"
+	else nginx_do && say "  started"; fi
 }
 
 # ============================================================================
@@ -557,19 +596,27 @@ page_cert() {
 		head2 "2  certificate"
 		row a "method" "$CERT_METHOD" "$([ "$CERT_METHOD" = letsencrypt ] && tool_note certbot)"
 		row b "domain" "$HUB_ADDR"    "name clients connect to"
-		row c "cert"   "$CERT"        "$(cert_present && echo present || echo missing)"
-		row d "key"    "$KEY"
+		if [ "$CERT_METHOD" = existing ]; then
+			# arbitrary paths, so they are given and shown whole
+			row c "cert" "$CERT" "$(file_note "$CERT")"
+			row d "key"  "$KEY"  "$(file_note "$KEY")"
+		else
+			row "" "directory" "$(dirname "$CERT")"
+			row "" "cert" "$(basename "$CERT")" "$(file_note "$CERT")"
+			row "" "key"  "$(basename "$KEY")"  "$(file_note "$KEY")"
+		fi
 		say ""
 		act p "show the keyprint"; act r "reset this page"
 		act s "return, keeping changes"; act q "return, discarding them"
 		menu
 		case $_key in
-			a) edit CERT_METHOD "method" "selfsigned needs no network, DC++ users must opt in" letsencrypt selfsigned existing ;;
-			b) edit HUB_ADDR "domain" "" ;;
-			c) edit CERT "cert" "" ;;
-			d) edit KEY "key" "" ;;
+			a) edit CERT_METHOD "method" "selfsigned needs no network, DC++ users must opt in" letsencrypt selfsigned existing
+			   sync_cert_paths ;;
+			b) edit HUB_ADDR "domain" ""; sync_cert_paths ;;
+			c) [ "$CERT_METHOD" = existing ] && edit CERT "cert" "full path" || say "  derived from the method and domain" ;;
+			d) [ "$CERT_METHOD" = existing ] && edit KEY "key" "full path" || say "  derived from the method and domain" ;;
 			p) say ""; show_keyprint; pause ;;
-			r) reset_vars $_own ;;
+			r) reset_vars $_own; sync_cert_paths ;;
 			s) return ;;
 			q) restore; return ;;
 			*) say "  no such choice" ;;
