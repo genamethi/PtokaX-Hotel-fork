@@ -247,8 +247,22 @@ hub_running()  { have_systemd && [ -n "$HUB" ] && systemctl is-active --quiet "p
 console_up()      { [ -n "$HUB" ] && [ -S "/run/ptokax/$HUB-console.sock" ]; }
 console_enabled() { [ -n "$HUB" ] && systemctl is-enabled --quiet "ptokax-console@$HUB.socket" 2>/dev/null; }
 console_unit()    { [ -f /etc/systemd/system/ptokax-console@.socket ] || [ -f /usr/lib/systemd/system/ptokax-console@.socket ]; }
-cert_present() { [ -s "$CERT" ] && [ -s "$KEY" ]; }
-file_note() { [ -s "$1" ] && printf present || printf missing; }
+# /etc/letsencrypt/live is 0700 root, so a plain test says missing for a
+# certificate that is really there
+priv_test_file() {
+	[ -s "$1" ] && return 0
+	[ "$(id -u)" -eq 0 ] && return 1
+	command -v sudo >/dev/null 2>&1 || return 1
+	sudo -n test -s "$1" 2>/dev/null
+}
+
+cert_present() { priv_test_file "$CERT" && priv_test_file "$KEY"; }
+
+file_note() {
+	priv_test_file "$1" && { printf present; return; }
+	[ -r "$(dirname "$1")" ] && { printf missing; return; }
+	printf 'cannot read, needs root'
+}
 
 # Where the pair lives, said once as context. certbot names its directory after
 # the domain and renews into it, which is why that path repeats the domain.
@@ -318,8 +332,7 @@ step_state() {
 		[ -n "$HUB" ] || { echo "no hub chosen on page 3"; return; }
 		command -v pxctl >/dev/null 2>&1 || [ -n "$STATE_DIR" ] || { echo "no pxctl, set a state dir on page 3"; return; }
 		hub_tree_ok || { echo "systemd does not know $HUB"; return; }
-		_d=$(hub_state_dir)
-		grep -q '^TLSEnabled[[:space:]]*=[[:space:]]*1' "$_d/cfg/Settings.pxt" 2>/dev/null && { echo done; return; }
+		hub_tls_enabled && { echo done; return; }
 		# nothing here can reach a running hub without the console. Loading an
 		# edited file into one is a script's job, not this one's.
 		if hub_running && ! console_up; then
@@ -607,6 +620,13 @@ manual_hub_settings() {
 	hub_setting_lines | sed 's/^/      /'
 }
 
+hub_tls_enabled() {
+	_d=$(hub_state_dir 2>/dev/null || true)
+	[ -n "$_d" ] || return 1
+	priv_cat "$_d/cfg/Settings.pxt" 2>/dev/null |
+		grep -q '^TLSEnabled[[:space:]]*=[[:space:]]*1'
+}
+
 run_hub_file() {
 	_d=$(hub_state_dir); _f=$_d/cfg/Settings.pxt
 	# systemd knowing the instance does not mean the tree has been seeded
@@ -637,7 +657,20 @@ run_hub_console() {
 	_tmpc=$(mktemp); hub_setting_chunk > "$_tmpc"
 	priv_sh "socat -t5 - 'UNIX-CONNECT:/run/ptokax/$HUB-console.sock' < '$_tmpc'" || { rm -f "$_tmpc"; return 1; }
 	rm -f "$_tmpc"
-	say "  saved. journalctl PTOKAX_SUBSYSTEM=console for output"
+
+	# the console reports errors to the journal, not back over the socket, so
+	# the only proof is the setting itself
+	sleep 1
+	if hub_tls_enabled; then
+		say "  applied"
+		return 0
+	fi
+	say "  the chunk did not take. If the journal shows"
+	say "      bad argument #1 to 'SetBool' (number expected, got nil)"
+	say "  then ptokax@$HUB is an older build without TLSEnabled and needs"
+	say "  the new binary installed before this can work."
+	say "  journalctl PTOKAX_SUBSYSTEM=console for the actual error"
+	return 1
 }
 
 run_conf() {
@@ -687,7 +720,9 @@ run_socket() {
 		priv_write "$_dir/20-proxy.conf" || return 1
 	say "  wrote $_dir/20-proxy.conf"
 	priv systemctl daemon-reload
-	confirm "restart ptokax@$HUB.socket?" && priv systemctl restart "ptokax@$HUB.socket"
+	# systemd refuses to start a socket whose service is already up, so this
+	# takes effect the next time the hub restarts
+	hub_running && say "  takes effect when ptokax@$HUB next restarts"
 	return 0
 }
 
