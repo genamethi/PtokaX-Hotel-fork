@@ -503,13 +503,34 @@ run_certbot_dns() {
 		_dd_token=$_secret; _secret=
 		[ -n "$_dd_token" ] || { say "  no token"; return 1; }
 
+		_dd_sub=${HUB_ADDR%%.duckdns.org}
+
+		# duckdns answers OK or KO and nothing else, so prove the token works
+		# before certbot depends on it
+		say "  checking the token against duckdns"
+		_dd_probe=$(curl -sS "https://www.duckdns.org/update?domains=$_dd_sub&token=$_dd_token&txt=setup-probe&verbose=true" 2>&1)
+		case $_dd_probe in
+			OK*) curl -sS "https://www.duckdns.org/update?domains=$_dd_sub&token=$_dd_token&clear=true" >/dev/null 2>&1 ;;
+			*)   say "  duckdns rejected it: $_dd_probe"
+			     say "  the token is the one on duckdns.org, and $_dd_sub must be yours"
+			     return 1 ;;
+		esac
+
 		_dd_hooks=/etc/letsencrypt/duckdns
 		priv_mkdir "$_dd_hooks"
 		# the token lives in the hook, so root only
-		printf '#!/bin/sh\nexec curl -sS "https://www.duckdns.org/update?domains=${CERTBOT_DOMAIN%%%%.duckdns.org}&token=%s&txt=$CERTBOT_VALIDATION"\n' \
-			"$_dd_token" | priv_write "$_dd_hooks/auth.sh"
-		printf '#!/bin/sh\nexec curl -sS "https://www.duckdns.org/update?domains=${CERTBOT_DOMAIN%%%%.duckdns.org}&token=%s&clear=true"\n' \
-			"$_dd_token" | priv_write "$_dd_hooks/cleanup.sh"
+		{
+			printf '#!/bin/sh\n'
+			printf 'r=$(curl -sS "https://www.duckdns.org/update?domains=${CERTBOT_DOMAIN%%%%.duckdns.org}&token=%s&txt=$CERTBOT_VALIDATION&verbose=true")\n' "$_dd_token"
+			printf 'printf %%s "$r"\n'
+			printf 'case $r in OK*) ;; *) exit 1 ;; esac\n'
+			printf '# let the record spread before the CA looks for it\n'
+			printf 'sleep 45\n'
+		} | priv_write "$_dd_hooks/auth.sh"
+		{
+			printf '#!/bin/sh\n'
+			printf 'exec curl -sS "https://www.duckdns.org/update?domains=${CERTBOT_DOMAIN%%%%.duckdns.org}&token=%s&clear=true"\n' "$_dd_token"
+		} | priv_write "$_dd_hooks/cleanup.sh"
 		priv_chmod 700 "$_dd_hooks/auth.sh" "$_dd_hooks/cleanup.sh"
 
 		confirm "run certbot with the duckdns TXT hook?" || return 1
@@ -588,7 +609,14 @@ manual_hub_settings() {
 
 run_hub_file() {
 	_d=$(hub_state_dir); _f=$_d/cfg/Settings.pxt
-	[ -f "$_f" ] || { say "  no $_f"; return 1; }
+	# systemd knowing the instance does not mean the tree has been seeded
+	if [ ! -f "$_f" ]; then
+		say "  no $_f"
+		say "  the instance exists but its config has not been created:"
+		say "      sudo pxctl create $HUB"
+		say "      sudo pxctl import $HUB <configdir>"
+		return 1
+	fi
 	hub_setting_lines | sed 's/^/    /'
 	confirm "write into $_f?" || return 1
 	priv_cp "$_f" "$_f.bak-nmdcs"
