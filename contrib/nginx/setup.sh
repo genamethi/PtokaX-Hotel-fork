@@ -309,10 +309,10 @@ step_state() {
 		hub_tree_ok || { echo "systemd does not know $HUB"; return; }
 		_d=$(hub_state_dir)
 		grep -q '^TLSEnabled[[:space:]]*=[[:space:]]*1' "$_d/cfg/Settings.pxt" 2>/dev/null && { echo done; return; }
-		# a running hub rewrites cfg/ from memory on shutdown, so the file
-		# cannot be edited underneath it
+		# without the console there is no way in from here, and the admin has
+		# their own: the Lua API, or the file with the hub stopped
 		if hub_running && ! console_up; then
-			echo "stop the hub, or switch the Lua console on"
+			echo manual
 			return
 		fi
 		echo ready ;;
