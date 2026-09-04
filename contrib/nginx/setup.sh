@@ -235,7 +235,9 @@ hub_tree_ok() {
 	[ -n "$_d" ] && priv_test_dir "$_d"
 }
 hub_running()  { have_systemd && [ -n "$HUB" ] && systemctl is-active --quiet "ptokax@$HUB" 2>/dev/null; }
-console_up()   { [ -n "$HUB" ] && [ -S "/run/ptokax/$HUB-console.sock" ]; }
+console_up()      { [ -n "$HUB" ] && [ -S "/run/ptokax/$HUB-console.sock" ]; }
+console_enabled() { [ -n "$HUB" ] && systemctl is-enabled --quiet "ptokax-console@$HUB.socket" 2>/dev/null; }
+console_unit()    { [ -f /etc/systemd/system/ptokax-console@.socket ] || [ -f /usr/lib/systemd/system/ptokax-console@.socket ]; }
 cert_present() { [ -s "$CERT" ] && [ -s "$KEY" ]; }
 file_note() { [ -s "$1" ] && printf present || printf missing; }
 
@@ -269,7 +271,7 @@ sync_cert_paths() {
 # steps. state prints one of: done | ready | <reason it cannot run>
 # ============================================================================
 # the account comes first: the build bakes it in and the unit runs as it
-STEPS='user nginx cert hub socket conf unit start'
+STEPS='user nginx cert console hub socket conf unit start'
 
 step_label() {
 	case $1 in
@@ -279,6 +281,7 @@ step_label() {
 		conf)   echo "write the nginx config" ;;
 		user)   echo "create the nginx account" ;;
 		unit)   echo "install the nginx unit" ;;
+		console) echo "enable the Lua console socket" ;;
 		socket) echo "install the proxy socket" ;;
 		start)  echo "start nginx" ;;
 	esac
@@ -293,6 +296,13 @@ step_state() {
 	cert)
 		cert_present && { echo done; return; }
 		[ "$CERT_METHOD" = existing ] && { echo "method is existing but $CERT is missing"; return; }
+		echo ready ;;
+	console)
+		have_systemd || { echo "systemd is off on page 1"; return; }
+		[ -n "$HUB" ] || { echo "no hub chosen on page 4"; return; }
+		hub_tree_ok || { echo "systemd does not know $HUB"; return; }
+		console_enabled && { echo done; return; }
+		console_unit || { echo "ptokax-console@.socket not installed, run make install"; return; }
 		echo ready ;;
 	hub)
 		[ -n "$HUB" ] || { echo "no hub chosen on page 4"; return; }
@@ -335,6 +345,7 @@ step_run() {
 	case $1 in
 		nginx)  run_build ;;   cert)   run_cert ;;
 		hub)    run_hub ;;     conf)   run_conf ;;
+		console) run_console ;;
 		user)   run_user ;;    unit)   run_unit ;;
 		socket) run_socket ;;  start)  run_start ;;
 	esac
@@ -492,6 +503,25 @@ hub_setting_chunk() {
 # Settings are never hand edited while the hub runs: it rewrites cfg/ from
 # memory on shutdown. Stopped, the file is written. Running, SetMan goes over
 # the console socket.
+run_console() {
+	if hub_running; then
+		say "  systemd will not enable a socket whose service is already up,"
+		say "  so this costs one stop and start of ptokax@$HUB"
+		confirm "stop it, enable the socket, start it again?" || return 1
+		priv systemctl stop "ptokax@$HUB" || return 1
+		if ! priv systemctl enable --now "ptokax-console@$HUB.socket"; then
+			priv systemctl start "ptokax@$HUB"
+			return 1
+		fi
+		priv systemctl start "ptokax@$HUB" || return 1
+		_i=0; while [ $_i -lt 10 ] && ! console_up; do sleep 1; _i=$((_i + 1)); done
+	else
+		priv systemctl enable "ptokax-console@$HUB.socket" || return 1
+		say "  enabled, it comes up with the hub"
+	fi
+	say "  socat - UNIX-CONNECT:/run/ptokax/$HUB-console.sock"
+}
+
 run_hub() {
 	if hub_running; then run_hub_console; else run_hub_file; fi
 }
@@ -512,19 +542,7 @@ run_hub_file() {
 }
 
 run_hub_console() {
-	if ! console_up; then
-		say "  hub running, console socket down"
-		say "  enabling it needs one stop and start"
-		confirm "stop ptokax@$HUB, enable the socket, start it?" || {
-			say "  unchanged, or stop the hub and run the plan again"; return 1; }
-		priv systemctl stop "ptokax@$HUB" || return 1
-		if ! priv systemctl enable --now "ptokax-console@$HUB.socket"; then
-			priv systemctl start "ptokax@$HUB"; return 1
-		fi
-		priv systemctl start "ptokax@$HUB" || return 1
-		_i=0; while [ $_i -lt 10 ] && ! console_up; do sleep 1; _i=$((_i + 1)); done
-		console_up || { say "  console socket still down"; return 1; }
-	fi
+	console_up || { say "  console socket is down, enable it with the console step"; return 1; }
 	ensure_tool socat || return 1
 	hub_setting_chunk | sed 's/^/    /'
 	confirm "send this over the console?" || return 1
