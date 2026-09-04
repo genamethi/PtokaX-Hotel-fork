@@ -83,6 +83,7 @@ const char * SetBoolCom[] = {
 #if defined(_WITH_SQLITE) || defined(_WITH_POSTGRES) || defined(_WITH_MYSQL)
 	"# Enable database support\n",
 #endif
+    "# Read PROXY protocol v2 or $MyIP headers on the TLS proxy listener\n",
 };
 
 const char * SetShortCom[] = {
@@ -258,6 +259,8 @@ const char * SetTxtCom[] = {
     "# MySQL database user\n",
     "# MySQL database password\n",
 #endif
+    "# Address and port of the TLS proxy listener, and the only source accepted on it\n",
+    "# Hub addresses for the pinger endpoint, with scheme, separated by ;\n",
 };
 //---------------------------------------------------------------------------
 

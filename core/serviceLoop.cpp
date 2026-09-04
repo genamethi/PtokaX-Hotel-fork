@@ -31,7 +31,9 @@
 #include "LanguageManager.h"
 #include "LuaConsole.h"
 #include "LuaScriptManager.h"
+#include "PingerInfo.h"
 #include "ProfileManager.h"
+#include "ProxyProtocol.h"
 #include "ServerManager.h"
 #include "SettingManager.h"
 #include "UdpDebug.h"
@@ -88,7 +90,7 @@ unsigned __stdcall ExecuteLoop(void *) {
 #endif
 //---------------------------------------------------------------------------
 
-ServiceLoop::AcceptedSocket::AcceptedSocket() : m_pNext(NULL),
+ServiceLoop::AcceptedSocket::AcceptedSocket() : m_pNext(NULL), m_bProxy(false),
 #ifdef _WIN32
 	m_Socket(INVALID_SOCKET)
 #else
@@ -236,6 +238,122 @@ ServiceLoop::~ServiceLoop() {
 }
 //---------------------------------------------------------------------------
 
+void ServiceLoop::DerivePeerAddress(const sockaddr_storage &Addr, char * sIP, uint8_t * ui128IpHash, uint16_t &ui16IpTableIdx, bool &bIPv6) {
+    if(Addr.ss_family == AF_INET6) {
+        memcpy(ui128IpHash, &((struct sockaddr_in6 *)&Addr)->sin6_addr.s6_addr, 16);
+
+        if(IN6_IS_ADDR_V4MAPPED(&((struct sockaddr_in6 *)&Addr)->sin6_addr)) {
+			in_addr ipv4addr;
+			memcpy(&ipv4addr, ((struct sockaddr_in6 *)&Addr)->sin6_addr.s6_addr + 12, 4);
+			strcpy(sIP, inet_ntoa(ipv4addr));
+
+            ui16IpTableIdx = ui128IpHash[14] * ui128IpHash[15];
+        } else {
+            bIPv6 = true;
+#if defined(_WIN32) && !defined(_WIN64) && !defined(_WIN_IOT)
+            win_inet_ntop(&((struct sockaddr_in6 *)&Addr)->sin6_addr, sIP, 40);
+#else
+            inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&Addr)->sin6_addr, sIP, 40);
+#endif
+            ui16IpTableIdx = GetIpTableIdx(ui128IpHash);
+        }
+    } else {
+        strcpy(sIP, inet_ntoa(((struct sockaddr_in *)&Addr)->sin_addr));
+
+        ui128IpHash[10] = 255;
+        ui128IpHash[11] = 255;
+        memcpy(ui128IpHash+12, &((struct sockaddr_in *)&Addr)->sin_addr.s_addr, 4);
+
+        ui16IpTableIdx = ui128IpHash[14] * ui128IpHash[15];
+    }
+}
+//---------------------------------------------------------------------------
+
+// Second half of AcceptUser for a proxied connection, run once the header names the
+// real address. The direct path does all of this before the User exists, which keeps a
+// banned address from costing an allocation. Here the User is already there, so a full
+// ban is delivered through its own send buffer instead of the raw socket.
+bool ServiceLoop::ApplyPeerAddress(User * pUser, const sockaddr_storage &Addr) {
+    bool bIPv6 = false;
+
+    char sIP[40];
+
+    uint8_t ui128IpHash[16];
+    memset(ui128IpHash, 0, 16);
+
+    uint16_t ui16IpTableIdx = 0;
+
+    DerivePeerAddress(Addr, sIP, ui128IpHash, ui16IpTableIdx, bIPv6);
+
+    memcpy(pUser->m_ui128IpHash, ui128IpHash, 16);
+    pUser->m_ui16IpTableIdx = ui16IpTableIdx;
+
+    pUser->SetIP(sIP);
+
+    pUser->m_ui32BoolBits &= ~(User::BIT_IPV4 | User::BIT_IPV6);
+
+    if(bIPv6 == true) {
+        pUser->m_ui32BoolBits |= User::BIT_IPV6;
+    } else {
+        pUser->m_ui32BoolBits |= User::BIT_IPV4;
+    }
+
+    time_t acc_time;
+    time(&acc_time);
+
+    BanItem * Ban = BanManager::m_Ptr->FindFull(ui128IpHash, acc_time);
+
+    if(Ban != NULL) {
+        uint32_t hash = 0;
+        if(((Ban->m_ui8Bits & BanManager::NICK) == BanManager::NICK) == true) {
+            hash = Ban->m_ui32NickHash;
+        }
+
+        int iMsgLen = GenerateBanMessage(Ban, acc_time);
+
+        if(((Ban->m_ui8Bits & BanManager::FULL) == BanManager::FULL) == true) {
+            if(iMsgLen != 0) {
+                pUser->SendCharDelayed(ServerManager::m_pGlobalBuffer, iMsgLen);
+            }
+
+            return false;
+        }
+
+        pUser->m_pLogInOut->m_pBan = UserBan::CreateUserBan(ServerManager::m_pGlobalBuffer, iMsgLen, hash);
+
+        if(pUser->m_pLogInOut->m_pBan == NULL) {
+            AppendDebugLog("%s - [MEM] Cannot allocate new uBan in ServiceLoop::ApplyPeerAddress\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    RangeBanItem * RangeBan = BanManager::m_Ptr->FindFullRange(ui128IpHash, acc_time);
+
+    if(RangeBan != NULL) {
+        int iMsgLen = GenerateRangeBanMessage(RangeBan, acc_time);
+
+        if(((RangeBan->m_ui8Bits & BanManager::FULL) == BanManager::FULL) == true) {
+            if(iMsgLen != 0) {
+                pUser->SendCharDelayed(ServerManager::m_pGlobalBuffer, iMsgLen);
+            }
+
+            return false;
+        }
+
+        pUser->m_pLogInOut->m_pBan = UserBan::CreateUserBan(ServerManager::m_pGlobalBuffer, iMsgLen, 0);
+
+        if(pUser->m_pLogInOut->m_pBan == NULL) {
+            AppendDebugLog("%s - [MEM] Cannot allocate new uBan in ServiceLoop::ApplyPeerAddress1\n");
+            return false;
+        }
+    }
+
+    return true;
+}
+//---------------------------------------------------------------------------
+
 void ServiceLoop::AcceptUser(AcceptedSocket * pAccptSocket) {
     bool bIPv6 = false;
 
@@ -246,33 +364,7 @@ void ServiceLoop::AcceptUser(AcceptedSocket * pAccptSocket) {
 
     uint16_t ui16IpTableIdx = 0;
 
-    if(pAccptSocket->m_Addr.ss_family == AF_INET6) {
-        memcpy(ui128IpHash, &((struct sockaddr_in6 *)&pAccptSocket->m_Addr)->sin6_addr.s6_addr, 16);
-
-        if(IN6_IS_ADDR_V4MAPPED(&((struct sockaddr_in6 *)&pAccptSocket->m_Addr)->sin6_addr)) {
-			in_addr ipv4addr;
-			memcpy(&ipv4addr, ((struct sockaddr_in6 *)&pAccptSocket->m_Addr)->sin6_addr.s6_addr + 12, 4);
-			strcpy(sIP, inet_ntoa(ipv4addr));
-
-            ui16IpTableIdx = ui128IpHash[14] * ui128IpHash[15];
-        } else {
-            bIPv6 = true;
-#if defined(_WIN32) && !defined(_WIN64) && !defined(_WIN_IOT)
-            win_inet_ntop(&((struct sockaddr_in6 *)&pAccptSocket->m_Addr)->sin6_addr, sIP, 40);
-#else
-            inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&pAccptSocket->m_Addr)->sin6_addr, sIP, 40);
-#endif
-            ui16IpTableIdx = GetIpTableIdx(ui128IpHash);
-        }
-    } else {
-        strcpy(sIP, inet_ntoa(((struct sockaddr_in *)&pAccptSocket->m_Addr)->sin_addr));
-
-        ui128IpHash[10] = 255;
-        ui128IpHash[11] = 255;
-        memcpy(ui128IpHash+12, &((struct sockaddr_in *)&pAccptSocket->m_Addr)->sin_addr.s_addr, 4);
-
-        ui16IpTableIdx = ui128IpHash[14] * ui128IpHash[15];
-    }
+    DerivePeerAddress(pAccptSocket->m_Addr, sIP, ui128IpHash, ui16IpTableIdx, bIPv6);
 
     // set the recv buffer
 #ifdef _WIN32
@@ -374,7 +466,9 @@ void ServiceLoop::AcceptUser(AcceptedSocket * pAccptSocket) {
     time_t acc_time;
     time(&acc_time);
 
-	BanItem * Ban = BanManager::m_Ptr->FindFull(ui128IpHash, acc_time);
+	// a proxied connection carries the proxy's address at this point, so the ban lookups
+	// wait for the header and run in ApplyPeerAddress instead
+	BanItem * Ban = pAccptSocket->m_bProxy == true ? NULL : BanManager::m_Ptr->FindFull(ui128IpHash, acc_time);
 
 	if(Ban != NULL) {
         if(((Ban->m_ui8Bits & BanManager::FULL) == BanManager::FULL) == true) {
@@ -395,7 +489,7 @@ void ServiceLoop::AcceptUser(AcceptedSocket * pAccptSocket) {
         }
     }
 
-	RangeBanItem * RangeBan = BanManager::m_Ptr->FindFullRange(ui128IpHash, acc_time);
+	RangeBanItem * RangeBan = pAccptSocket->m_bProxy == true ? NULL : BanManager::m_Ptr->FindFullRange(ui128IpHash, acc_time);
 
 	if(RangeBan != NULL) {
         if(((RangeBan->m_ui8Bits & BanManager::FULL) == BanManager::FULL) == true) {
@@ -505,6 +599,12 @@ void ServiceLoop::AcceptUser(AcceptedSocket * pAccptSocket) {
         }
     }
         
+    // The address above is the proxy's. Hold the user short of the $Lock until the
+    // header arrives, so ban checks and SetIP run against the client's own address.
+    if(pAccptSocket->m_bProxy == true) {
+        pUser->m_ui8State = User::STATE_PROXY_HEADER;
+    }
+
     // Everything is ok, now add to users...
     Users::m_Ptr->AddUser(pUser);
 }
@@ -584,6 +684,8 @@ void ServiceLoop::ReceiveLoop() {
     	iValue = acctime / 60;
         ServerManager::m_ui64Mins = iValue;
 
+        PingerWriteInfo();
+
         if(ServerManager::m_ui64Mins == 0 || ServerManager::m_ui64Mins == 15 || ServerManager::m_ui64Mins == 30 || ServerManager::m_ui64Mins == 45) {
             RegManager::m_Ptr->Save(false, true);
 #ifdef _WIN32
@@ -662,6 +764,51 @@ void ServiceLoop::ReceiveLoop() {
         //}
 
         switch(curUser->m_ui8State) {
+        	case User::STATE_PROXY_HEADER: {
+        		PxProxyHeader Header;
+
+        		const PxProxyResult eResult = PxProxyParse(curUser->m_pRecvBuf, curUser->m_ui32RecvBufDataLen, Header);
+
+        		if(eResult == PX_PROXY_NEED_MORE) {
+        			// same 20 second budget the login states get
+        			if(ServerManager::m_ui64ActualTick - curUser->m_pLogInOut->m_ui64LogonTick > 20) {
+						UdpDebug::m_Ptr->BroadcastFormat("[SYS] Proxy header timeout for %s - connection closed.", curUser->m_sIP);
+        				curUser->Close();
+        			}
+
+        			continue;
+        		}
+
+        		if(eResult != PX_PROXY_OK) {
+					UdpDebug::m_Ptr->BroadcastFormat("[SYS] Bad proxy header from %s - connection closed.", curUser->m_sIP);
+        			curUser->Close();
+        			continue;
+        		}
+
+        		if(ApplyPeerAddress(curUser, Header.m_Addr) == false) {
+        			curUser->Close();
+        			continue;
+        		}
+
+        		if(Header.m_bSecure == true) {
+        			curUser->m_ui32BoolBits |= User::BIT_SECURE;
+        			memcpy(curUser->m_sTLSVersion, Header.m_sTLSVersion, sizeof(curUser->m_sTLSVersion));
+        		}
+
+        		// drop the header, leaving whatever the client already sent behind it
+        		curUser->m_ui32RecvBufDataLen -= (uint32_t)Header.m_szConsumed;
+
+        		if(curUser->m_ui32RecvBufDataLen != 0) {
+        			memmove(curUser->m_pRecvBuf, curUser->m_pRecvBuf + Header.m_szConsumed, curUser->m_ui32RecvBufDataLen);
+        		}
+
+        		curUser->m_pRecvBuf[curUser->m_ui32RecvBufDataLen] = '\0';
+
+        		curUser->m_ui8State = User::STATE_SOCKET_ACCEPTED;
+
+        		// MakeLock waits for the next loop, matching a direct connection
+        		break;
+        	}
         	case User::STATE_SOCKET_ACCEPTED: {
         		if(ServerManager::m_ui64ActualTick != curUser->m_pLogInOut->m_ui64LogonTick) {
     				if(curUser->MakeLock() == false) {
@@ -1179,9 +1326,9 @@ void ServiceLoop::SendLoop() {
 //---------------------------------------------------------------------------
 
 #ifdef _WIN32
-void ServiceLoop::AcceptSocket(const SOCKET s, const sockaddr_storage &addr) {
+void ServiceLoop::AcceptSocket(const SOCKET s, const sockaddr_storage &addr, const bool bProxy/* = false*/) {
 #else
-void ServiceLoop::AcceptSocket(const int s, const sockaddr_storage &addr) {
+void ServiceLoop::AcceptSocket(const int s, const sockaddr_storage &addr, const bool bProxy/* = false*/) {
 #endif
     AcceptedSocket * pNewSocket = new (std::nothrow) AcceptedSocket();
     if(pNewSocket == NULL) {
@@ -1200,6 +1347,8 @@ void ServiceLoop::AcceptSocket(const int s, const sockaddr_storage &addr) {
     pNewSocket->m_Socket = s;
 
     memcpy(&pNewSocket->m_Addr, &addr, sizeof(sockaddr_storage));
+
+    pNewSocket->m_bProxy = bProxy;
 
     pNewSocket->m_pNext = NULL;
 

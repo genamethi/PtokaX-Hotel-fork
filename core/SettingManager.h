@@ -83,6 +83,10 @@ public:
     
     uint16_t m_ui16PortNumbers[25]; //SettingManager->ui16PortNumbers[0]
 
+    // TLSProxyAddress split once, since the source check runs per connection
+    char m_sTLSProxyAddress[46];
+    uint16_t m_ui16TLSProxyPort;
+
     bool m_bBools[SETBOOL_IDS_END]; //SettingManager->bBools[]
     
     // PPK ... same nick for bot and opchat bool
@@ -135,6 +139,7 @@ public:
     void UpdateMinShare();
     void UpdateMaxShare();
     void UpdateTCPPorts();
+    void UpdateTLSProxyAddress();
     void UpdateBotsSameNick();
     void UpdateLanguage();
     void UpdateUDPPort();

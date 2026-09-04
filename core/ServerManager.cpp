@@ -492,6 +492,8 @@ bool ServerManager::Start() {
         }
     }
 
+    CreateProxyServerThread();
+
 	if(m_pServersS == NULL) {
 #ifdef _BUILD_GUI
 		::MessageBox(MainWindow::m_Ptr->m_hWnd, LanguageManager::m_Ptr->m_sTexts[LAN_NO_VALID_TCP_PORT_SPECIFIED], LanguageManager::m_Ptr->m_sTexts[LAN_ERROR], MB_OK|MB_ICONERROR);
@@ -875,6 +877,11 @@ void ServerManager::UpdateServers() {
 		pCur = pNext;
 		pNext = pCur->m_pNext;
 
+        // the proxy listener has its own address setting and is not in TCPPorts
+        if(pCur->m_bProxy == true) {
+            continue;
+        }
+
         bFound = false;
 
         for(uint8_t ui8i = 0; ui8i < 25; ui8i++) {
@@ -1027,8 +1034,27 @@ void ServerManager::UpdateAutoRegState() {
 }
 //---------------------------------------------------------------------------
 
-void ServerManager::CreateServerThread(const int iAddrFamily, const uint16_t ui16PortNumber, const bool bResume/* = false*/) {
-	ServerThread * pServer = new (std::nothrow) ServerThread(iAddrFamily, ui16PortNumber);
+// One listener for the TLS terminator, on TLSProxyAddress. Its family follows the
+// address, since the proxy is normally on the same host.
+void ServerManager::CreateProxyServerThread(const bool bResume/* = false*/) {
+	if(SettingManager::m_Ptr->m_bBools[SETBOOL_TLS_ENABLED] == false) {
+		return;
+	}
+
+	if(SettingManager::m_Ptr->m_ui16TLSProxyPort == 0) {
+		AppendLog("TLSEnabled is on but TLSProxyAddress has no usable address and port", false, PX_LOG_ERR);
+		return;
+	}
+
+	in6_addr addr6;
+	const int iFamily = inet_pton(AF_INET6, SettingManager::m_Ptr->m_sTLSProxyAddress, &addr6) == 1 ? AF_INET6 : AF_INET;
+
+	CreateServerThread(iFamily, SettingManager::m_Ptr->m_ui16TLSProxyPort, bResume, true);
+}
+//--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+void ServerManager::CreateServerThread(const int iAddrFamily, const uint16_t ui16PortNumber, const bool bResume/* = false*/, const bool bProxy/* = false*/) {
+	ServerThread * pServer = new (std::nothrow) ServerThread(iAddrFamily, ui16PortNumber, bProxy);
     if(pServer == NULL) {
 		AppendDebugLog("%s - [MEM] Cannot allocate pServer in ServerCreateServerThread\n");
         exit(EXIT_FAILURE);

@@ -79,6 +79,9 @@ SettingManager::SettingManager(void) : m_ui64MinShare(0), m_ui64MaxShare(0), m_s
 
     memset(m_ui16PortNumbers, 0 , sizeof(m_ui16PortNumbers));
     
+    m_sTLSProxyAddress[0] = '\0';
+    m_ui16TLSProxyPort = 0;
+
     memset(m_bBools, 0 , sizeof(m_bBools));
 
     // Read default bools
@@ -1407,6 +1410,9 @@ void SettingManager::SetText(const size_t szTxtId, const char * sTxt, const size
         case SETTXT_TCP_PORTS:
             UpdateTCPPorts();
             break;
+        case SETTXT_TLS_PROXY_ADDRESS:
+            UpdateTLSProxyAddress();
+            break;
         case SETTXT_HUB_ADDRESS:
 		case SETTXT_IPV4_ADDRESS:
 		case SETTXT_IPV6_ADDRESS:
@@ -1445,6 +1451,7 @@ void SettingManager::UpdateAll() {
     UpdatePermBanRedirAddress();
     UpdateNickLimitMessage();
     UpdateTCPPorts();
+    UpdateTLSProxyAddress();
     UpdateBotsSameNick();
 }
 //---------------------------------------------------------------------------
@@ -2436,6 +2443,66 @@ void SettingManager::UpdateTCPPorts() {
     }
 
 	ServerManager::UpdateServers();
+}
+//---------------------------------------------------------------------------
+
+// "127.0.0.1:5411" or "[::1]:5411". Without a port the listener is not created.
+void SettingManager::UpdateTLSProxyAddress() {
+    if(m_bUpdateLocked == true) {
+        return;
+    }
+
+    m_sTLSProxyAddress[0] = '\0';
+    m_ui16TLSProxyPort = 0;
+
+    const char * sValue = m_sTexts[SETTXT_TLS_PROXY_ADDRESS];
+
+    if(sValue == NULL || sValue[0] == '\0') {
+        return;
+    }
+
+    const char * sHost = sValue;
+    const char * sColon = NULL;
+
+    if(sValue[0] == '[') {
+        const char * sClose = strchr(sValue, ']');
+
+        if(sClose == NULL) {
+            return;
+        }
+
+        sHost = sValue + 1;
+        sColon = sClose[1] == ':' ? sClose + 1 : NULL;
+
+        if(sColon == NULL) {
+            return;
+        }
+
+        if((size_t)(sClose - sHost) >= sizeof(m_sTLSProxyAddress)) {
+            return;
+        }
+
+        memcpy(m_sTLSProxyAddress, sHost, (size_t)(sClose - sHost));
+        m_sTLSProxyAddress[sClose - sHost] = '\0';
+    } else {
+        sColon = strrchr(sValue, ':');
+
+        if(sColon == NULL || (size_t)(sColon - sHost) >= sizeof(m_sTLSProxyAddress)) {
+            return;
+        }
+
+        memcpy(m_sTLSProxyAddress, sHost, (size_t)(sColon - sHost));
+        m_sTLSProxyAddress[sColon - sHost] = '\0';
+    }
+
+    const int iPort = atoi(sColon + 1);
+
+    if(iPort < 1 || iPort > 65535) {
+        m_sTLSProxyAddress[0] = '\0';
+        return;
+    }
+
+    m_ui16TLSProxyPort = (uint16_t)iPort;
 }
 //---------------------------------------------------------------------------
 

@@ -184,7 +184,13 @@ struct User {
 
     char m_sModes[3];
 
+    // normalised to the bare version, "1.3", from either header format
+    char m_sTLSVersion[8];
+
     enum UserStates {
+        // only reached on the TLS proxy listener, and only until the header is read.
+        // MakeLock is held back until then so the ban checks run on the real address
+        STATE_PROXY_HEADER,
         STATE_SOCKET_ACCEPTED,
         STATE_KEY_OR_SUP,
         STATE_VALIDATE,
@@ -221,6 +227,7 @@ struct User {
     	BIT_HAVE_SHARECOUNTED          = 0x8000,
     	BIT_PRCSD_MYINFO               = 0x10000,
     	BIT_RECV_FLOODER               = 0x20000,
+    	BIT_SECURE                     = 0x40000,
     	BIT_QUACK_SUPPORTS             = 0x400000,
     	BIT_IPV6                       = 0x800000,
     	BIT_IPV4                       = 0x1000000,

@@ -87,6 +87,7 @@ bool SetBoolDef[] = {
 #if defined(_WITH_SQLITE) || defined(_WITH_POSTGRES) || defined(_WITH_MYSQL)
     true, //ENABLE_DATABASE,
 #endif
+    false, //TLS_ENABLED
 };
 
 int16_t SetShortDef[] = {
@@ -262,6 +263,8 @@ const char* SetTxtDef[] = {
 	"ptokax", //MYSQL_USER,
 	"", //MYSQL_PASS,
 #endif
+    "127.0.0.1:5411", //TLS_PROXY_ADDRESS
+    "", //PINGER_ADDRESSES
 };
 //---------------------------------------------------------------------------
 

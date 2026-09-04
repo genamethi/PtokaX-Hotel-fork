@@ -42,13 +42,13 @@ ServerThread::AntiConFlood::AntiConFlood(const uint8_t * pIpHash) : m_ui64Time(S
 };
 //---------------------------------------------------------------------------
 
-ServerThread::ServerThread(const int iAddrFamily, const uint16_t ui16PortNumber) : m_pAntiFloodList(NULL), 
+ServerThread::ServerThread(const int iAddrFamily, const uint16_t ui16PortNumber, const bool bProxy/* = false*/) : m_pAntiFloodList(NULL),
 #ifdef _WIN32
     m_hThreadHandle(NULL), m_Server(INVALID_SOCKET),
 #else
     m_ThreadId(0), m_Server(-1),
 #endif
-	m_ui32SuspendTime(0), m_iAdressFamily(iAddrFamily), m_bTerminated(false), m_bInheritedSck(false), m_pPrev(NULL), m_pNext(NULL), m_ui16Port(ui16PortNumber),
+	m_ui32SuspendTime(0), m_iAdressFamily(iAddrFamily), m_bTerminated(false), m_bInheritedSck(false), m_bProxy(bProxy), m_pPrev(NULL), m_pNext(NULL), m_ui16Port(ui16PortNumber),
 	m_bActive(false), m_bSuspended(false) {
 
 #ifdef _WIN32
@@ -166,7 +166,11 @@ void ServerThread::Run() {
 				}
 #endif
 			} else {
-				if(isFlooder(s, addr) == true) {
+				// every connection here comes from the proxy, so a per-address
+				// rate check would count them all as one flooder
+				if(m_bProxy == true) {
+					ServiceLoop::m_Ptr->AcceptSocket(s, addr, true);
+				} else if(isFlooder(s, addr) == true) {
 #ifdef _WIN32
 					shutdown(s, SD_SEND);
 					closesocket(s);
@@ -261,6 +265,18 @@ bool ServerThread::Listen(const bool bSilent/* = false*/) {
 		return true;
 	}
 
+	// a socket unit names this one, since its address is not in TCPPorts
+	if(m_bProxy == true && PxAdoptListenFdByName("proxy", &m_Server) == true) {
+		m_bInheritedSck = true;
+
+		const int iProxyFlags = fcntl(m_Server, F_GETFL, 0);
+		if(iProxyFlags != -1) {
+			fcntl(m_Server, F_SETFL, iProxyFlags | O_NONBLOCK);
+		}
+
+		return true;
+	}
+
 	if(PxAdoptListenFd(m_iAdressFamily, m_ui16Port, &m_Server) == true) {
 		m_bInheritedSck = true;
 
@@ -324,7 +340,13 @@ bool ServerThread::Listen(const bool bSilent/* = false*/) {
         ((struct sockaddr_in6 *)&sas)->sin6_port = htons(m_ui16Port);
         sas_len = sizeof(struct sockaddr_in6);
 
-        if(SettingManager::m_Ptr->m_bBools[SETBOOL_BIND_ONLY_SINGLE_IP] == true && ServerManager::m_sHubIP6[0] != '\0') {
+        if(m_bProxy == true) {
+#if defined(_WIN32) && !defined(_WIN64) && !defined(_WIN_IOT)
+            win_inet_pton(SettingManager::m_Ptr->m_sTLSProxyAddress, &((struct sockaddr_in6 *)&sas)->sin6_addr);
+#else
+            inet_pton(AF_INET6, SettingManager::m_Ptr->m_sTLSProxyAddress, &((struct sockaddr_in6 *)&sas)->sin6_addr);
+#endif
+        } else if(SettingManager::m_Ptr->m_bBools[SETBOOL_BIND_ONLY_SINGLE_IP] == true && ServerManager::m_sHubIP6[0] != '\0') {
 #if defined(_WIN32) && !defined(_WIN64) && !defined(_WIN_IOT)
             win_inet_pton(ServerManager::m_sHubIP6, &((struct sockaddr_in6 *)&sas)->sin6_addr);
 #else
@@ -348,7 +370,9 @@ bool ServerThread::Listen(const bool bSilent/* = false*/) {
         ((struct sockaddr_in *)&sas)->sin_port = htons(m_ui16Port);
         sas_len = sizeof(struct sockaddr_in);
 
-        if(SettingManager::m_Ptr->m_bBools[SETBOOL_BIND_ONLY_SINGLE_IP] == true && ServerManager::m_sHubIP[0] != '\0') {
+        if(m_bProxy == true) {
+            ((struct sockaddr_in *)&sas)->sin_addr.s_addr = inet_addr(SettingManager::m_Ptr->m_sTLSProxyAddress);
+        } else if(SettingManager::m_Ptr->m_bBools[SETBOOL_BIND_ONLY_SINGLE_IP] == true && ServerManager::m_sHubIP[0] != '\0') {
             ((struct sockaddr_in *)&sas)->sin_addr.s_addr = inet_addr(ServerManager::m_sHubIP);
         } else {
             ((struct sockaddr_in *)&sas)->sin_addr.s_addr = INADDR_ANY;

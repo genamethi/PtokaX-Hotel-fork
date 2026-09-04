@@ -604,6 +604,7 @@ User::User() : m_ui64SharedSize(0), m_ui64ChangedSharedSizeShort(0), m_ui64Chang
 	m_sIP[0] = '\0';
 	m_sIPv4[0] = '\0';
 	m_sModes[0] = '\0';
+	m_sTLSVersion[0] = '\0';
 }
 //---------------------------------------------------------------------------
 
@@ -1096,6 +1097,13 @@ bool User::DoRecv() {
 	ServerManager::m_ui64BytesRead += recvlen;
 	m_ui32RecvBufDataLen += recvlen;
 	m_pRecvBuf[m_ui32RecvBufDataLen] = '\0';
+
+	// a PROXY v2 header is binary and can hold a 0x7C byte, so the command splitter
+	// must not see it. ServiceLoop::ReceiveLoop consumes the header first.
+	if(m_ui8State == STATE_PROXY_HEADER) {
+		return false;
+	}
+
     if(UserProcessLines(this, m_ui32RecvBufDataLen-recvlen) == true) {
         return true;
     }

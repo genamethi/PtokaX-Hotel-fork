@@ -83,6 +83,7 @@ const char* SetBoolStr[] = {
 #if defined(_WITH_SQLITE) || defined(_WITH_POSTGRES) || defined(_WITH_MYSQL)
 	"EnableDatabase",
 #endif
+    "TLSEnabled",
 };
 
 const char* SetShortStr[] = {
@@ -258,6 +259,8 @@ const char* SetTxtStr[] = {
 	"MySQLUser",
 	"MySQLPass",
 #endif
+    "TLSProxyAddress",
+    "PingerAddresses",
 };
 //---------------------------------------------------------------------------
 

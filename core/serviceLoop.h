@@ -44,6 +44,10 @@ private:
 
         AcceptedSocket * m_pNext;
 
+        // arrived on the TLS proxy listener, so m_Addr is the proxy and the real
+        // address comes from the header
+        bool m_bProxy;
+
 #ifdef _WIN32
         SOCKET m_Socket;
 #else
@@ -62,6 +66,8 @@ private:
 	const ServiceLoop& operator=(const ServiceLoop&);
 
     static void AcceptUser(AcceptedSocket * pAccptSocket);
+    static void DerivePeerAddress(const sockaddr_storage &Addr, char * sIP, uint8_t * ui128IpHash, uint16_t &ui16IpTableIdx, bool &bIPv6);
+    static bool ApplyPeerAddress(User * pUser, const sockaddr_storage &Addr);
 protected:
 public:
 	double m_dLoggedUsers, m_dActualSrvLoopLogins;
@@ -87,9 +93,9 @@ public:
 	~ServiceLoop();
 
 #ifdef _WIN32
-	void AcceptSocket(const SOCKET s, const sockaddr_storage &addr);
+	void AcceptSocket(const SOCKET s, const sockaddr_storage &addr, const bool bProxy = false);
 #else
-	void AcceptSocket(const int s, const sockaddr_storage &addr);
+	void AcceptSocket(const int s, const sockaddr_storage &addr, const bool bProxy = false);
 #endif
 	void ReceiveLoop();
 	void SendLoop();

@@ -83,6 +83,7 @@ OBSOLETE_SETBOOL_POPUP_SCRIPT_WINDOW,
 #if defined(_WITH_SQLITE) || defined(_WITH_POSTGRES) || defined(_WITH_MYSQL)
     SETBOOL_ENABLE_DATABASE,
 #endif
+    SETBOOL_TLS_ENABLED,
     SETBOOL_IDS_END
 };//SETBOOL_, 
 
@@ -260,6 +261,8 @@ enum SetTxtIds {
 	SETTXT_MYSQL_USER,
 	SETTXT_MYSQL_PASS,
 #endif
+    SETTXT_TLS_PROXY_ADDRESS,
+    SETTXT_PINGER_ADDRESSES,
     SETTXT_IDS_END
 };//SETTXT_, 
 //---------------------------------------------------------------------------

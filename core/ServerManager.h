@@ -108,7 +108,8 @@ public:
     static void UpdateServers();
     static void Stop();
     static void FinalClose();
-    static void CreateServerThread(const int iAddrFamily, const uint16_t ui16PortNumber, const bool bResume = false);
+    static void CreateServerThread(const int iAddrFamily, const uint16_t ui16PortNumber, const bool bResume = false, const bool bProxy = false);
+    static void CreateProxyServerThread(const bool bResume = false);
 
 	static void CommandLineSetup();
 

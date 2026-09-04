@@ -69,7 +69,12 @@ public:
 
     bool m_bActive, m_bSuspended;
 
-	ServerThread(const int iAddrFamily, const uint16_t ui16PortNumber);
+	// TLSProxyAddress listener. Binds that address rather than the hub address, takes no
+	// part in the per-address connection flood check, since every connection on it carries
+	// the proxy's address, and is not reconciled against TCPPorts by UpdateServers
+	bool m_bProxy;
+
+	ServerThread(const int iAddrFamily, const uint16_t ui16PortNumber, const bool bProxy = false);
 	~ServerThread();
 
 	void Resume();
