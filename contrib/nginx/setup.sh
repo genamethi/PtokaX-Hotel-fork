@@ -91,6 +91,19 @@ say()  { printf '%s\n' "$1"; }
 die()  { printf '%s: %s\n' "$self" "$1" >&2; exit 1; }
 rule() { printf '  %s\n' '----------------------------------------------------------------'; }
 head2() { printf '\n  %s\n' "$1"; rule; }
+# one or two lines saying what the page achieves, before any field
+intro() { printf '  %s\n' "$1"; [ -n "${2:-}" ] && printf '  %s\n' "$2"; printf '\n'; }
+
+# the command that would install a missing tool on this system
+pkg_hint() {
+	if   command -v pacman >/dev/null 2>&1; then printf 'sudo pacman -S %s' "$1"
+	elif command -v apt    >/dev/null 2>&1; then printf 'sudo apt install %s' "$1"
+	elif command -v dnf    >/dev/null 2>&1; then printf 'sudo dnf install %s' "$1"
+	elif command -v zypper >/dev/null 2>&1; then printf 'sudo zypper install %s' "$1"
+	elif command -v apk    >/dev/null 2>&1; then printf 'sudo apk add %s' "$1"
+	else printf 'install %s with your package manager' "$1"
+	fi
+}
 
 # key, label, value, note
 row() {
@@ -257,7 +270,17 @@ st_hub()     {
 	if grep -q '^TLSEnabled[[:space:]]*=[[:space:]]*1' "$d/cfg/Settings.pxt" 2>/dev/null
 	then echo "$HUB, enabled"; else echo "$HUB, not enabled"; fi
 }
-st_conf()    { if [ -n "$STREAM_DIR" ] && [ -f "$STREAM_DIR/ptokax-nmdcs.conf" ]; then echo "written"; else echo "not written"; fi; }
+st_conf() {
+	if [ -n "$STREAM_DIR" ] && [ -f "$STREAM_DIR/ptokax-nmdcs.conf" ]; then echo "written"; else echo "not written"; fi
+}
+
+# the only real ordering in the menu: the config names a binary and a certificate
+conf_blocked_by() {
+	_b=
+	nginx_has_stream || _b="nginx"
+	{ [ -s "$CERT" ] && [ -s "$KEY" ]; } || _b="${_b:+$_b and }a certificate"
+	[ -n "$_b" ] && printf 'needs %s first' "$_b"
+}
 st_systemd() {
 	have_systemd || { echo "not in use"; return; }
 	s=
@@ -268,17 +291,25 @@ st_systemd() {
 
 # --- page 1, nginx ----------------------------------------------------------
 page_nginx() {
-	_own='NGINX_MODE NGINX_PREFIX BUILD_DIR NGINX_USER'
+	_own='NGINX_MODE NGINX_PREFIX BUILD_DIR'
 	snapshot $_own
 	while :; do
 		head2 "1  nginx"
 		b=$(nginx_bin)
+		if [ -z "$b" ]; then
+			intro "No nginx found. Build one below, or point mode at a packaged" \
+			      "one that already has the stream module."
+		elif nginx_has_stream; then
+			intro "This nginx has the stream module, so nothing more is needed here."
+		else
+			intro "This nginx has no stream module and cannot terminate NMDCS." \
+			      "Build one below. It installs beside the packaged nginx."
+		fi
 		row a "mode"        "$NGINX_MODE"    "auto, system or prefix"
 		row b "prefix"      "$NGINX_PREFIX"  "where a source build installs"
 		row c "source dir"  "$BUILD_DIR"     "clone lands here"
-		row d "run as user" "$NGINX_USER"    "$(user_exists "$NGINX_USER" && echo 'exists' || echo 'not created yet')"
 		say ""
-		row "" "binary"     "${b:-none found}" ""
+		row "" "binary"     "${b:-none found}"
 		row "" "stream"     "$(nginx_has_stream && echo yes || echo no)" "required, off by default"
 		say ""
 		act i "build and install from source"
@@ -288,14 +319,10 @@ page_nginx() {
 		menu
 		case $REPLY_KEY in
 			a) edit NGINX_MODE "mode" \
-			     "Which nginx to use. auto prefers a build under the prefix, then PATH." \
+			     "auto prefers a build under the prefix, then whatever is on PATH" \
 			     auto system prefix ;;
-			b) edit NGINX_PREFIX "prefix" \
-			     "Install prefix for a source build. Leaves a distro nginx alone." ;;
-			c) edit BUILD_DIR "source dir" \
-			     "Where the nginx git clone is kept, so a rebuild is a pull." ;;
-			d) edit NGINX_USER "user" \
-			     "Account the nginx unit runs as, User= and Group=. A packaged nginx starts its master as root and drops workers to this account. The unit here runs as it from the start, so nginx is never root. Created as a system user when the unit is installed." ;;
+			b) edit NGINX_PREFIX "prefix" "a source build installs here" ;;
+			c) edit BUILD_DIR "source dir" "the git clone is kept here, so a rebuild is a pull" ;;
 			i) do_build_nginx; pause ;;
 			r) reset_vars $_own; say "  page reset" ;;
 			s) save_conf; return ;;
@@ -378,14 +405,17 @@ page_cert() {
 	snapshot $_own
 	while :; do
 		head2 "2  certificate"
-		row a "method" "$CERT_METHOD" "letsencrypt, selfsigned or existing"
+		if [ -s "$CERT" ] && [ -s "$KEY" ]; then
+			intro "A certificate is in place. nginx will present this to clients."
+		else
+			intro "nginx needs a certificate to terminate TLS." \
+			      "A CA-signed one just works. Self-signed makes DC++ users opt in."
+		fi
+		_cb=$(command -v certbot >/dev/null 2>&1 && echo "" || echo "certbot not installed")
+		row a "method" "$CERT_METHOD" "$([ "$CERT_METHOD" = letsencrypt ] && printf '%s' "$_cb")"
 		row b "domain" "$HUB_ADDR"    "name clients connect to"
 		row c "cert"   "$CERT"        "$([ -s "$CERT" ] && echo present || echo missing)"
 		row d "key"    "$KEY"         "$([ -s "$KEY" ] && echo present || echo missing)"
-		say ""
-		say "    ncdc stores the keyprint on first connect and asks for /accept when"
-		say "    it changes. DC++ does not pin, so without a CA-signed certificate it"
-		say "    connects only with untrusted hubs enabled or a ?kp= in the address."
 		say ""
 		act i "obtain or generate now"
 		act p "show the keyprint and the ?kp= address"
@@ -395,11 +425,11 @@ page_cert() {
 		menu
 		case $REPLY_KEY in
 			a) edit CERT_METHOD "method" \
-			     "letsencrypt runs certbot. selfsigned needs no network but makes DC++ users opt in. existing uses the paths below as they are." \
+			     "letsencrypt runs certbot, selfsigned needs no network, existing uses the paths below unchanged" \
 			     letsencrypt selfsigned existing ;;
-			b) edit HUB_ADDR "domain" "Hostname on the certificate and in the client address." ;;
-			c) edit CERT "cert" "Path nginx reads as ssl_certificate." ;;
-			d) edit KEY  "key"  "Path nginx reads as ssl_certificate_key." ;;
+			b) edit HUB_ADDR "domain" "goes on the certificate and in the client address" ;;
+			c) edit CERT "cert" "nginx reads this as ssl_certificate" ;;
+			d) edit KEY  "key"  "nginx reads this as ssl_certificate_key" ;;
 			i) do_cert; pause ;;
 			p) show_keyprint; pause ;;
 			r) reset_vars $_own; say "  page reset" ;;
@@ -412,7 +442,23 @@ page_cert() {
 do_cert() {
 	case $CERT_METHOD in
 		letsencrypt)
-			command -v certbot >/dev/null 2>&1 || { say "  certbot not found"; return 0; }
+			if ! command -v certbot >/dev/null 2>&1; then
+				say ""
+				say "  Let's Encrypt needs certbot, which is not installed."
+				say ""
+				say "      $(pkg_hint certbot)"
+				say ""
+				say "  It also needs $HUB_ADDR to resolve to this host and port 80"
+				say "  free while it runs."
+				say ""
+				confirm "switch to a self-signed certificate instead?" || return 0
+				CERT_METHOD=selfsigned
+				save_conf
+				do_cert
+				return 0
+			fi
+			say ""
+			say "  certbot needs $HUB_ADDR to resolve to this host and port 80 free."
 			confirm "run certbot for $HUB_ADDR?" || return 0
 			priv certbot certonly --standalone -d "$HUB_ADDR" || return 0
 			CERT=/etc/letsencrypt/live/$HUB_ADDR/fullchain.pem
@@ -464,6 +510,8 @@ page_hub() {
 	snapshot $_own
 	while :; do
 		head2 "3  hub settings"
+		intro "Turns on the hub's proxy listener and the pinger address list." \
+		      "Set through pxctl and the console, never by hand while it runs."
 		d=$(hub_state_dir 2>/dev/null || true)
 		row a "hub name"        "${HUB:-<none>}"        "systemd instance ptokax@<name>"
 		row b "state dir"       "${STATE_DIR:-<pxctl>}" "${d:-unknown}"
@@ -616,6 +664,14 @@ page_conf() {
 	snapshot $_own
 	while :; do
 		head2 "4  nginx config"
+		_blk=$(conf_blocked_by)
+		if [ -n "$_blk" ]; then
+			intro "Writes the stream block and the pinger snippet. It $_blk," \
+			      "since the config names the binary's paths and the certificate."
+		else
+			intro "Writes the stream block nginx terminates NMDCS with, and the" \
+			      "snippet that serves hubinfo.json."
+		fi
 		row a "stream dir" "${STREAM_DIR:-<detect>}" "stream {} is a sibling of http {}"
 		row b "conf.d dir" "${CONFD_DIR:-<detect>}"  "pinger snippet, inside http {}"
 		say ""
@@ -678,11 +734,17 @@ write_conf() {
 
 # --- page 5, systemd --------------------------------------------------------
 page_systemd() {
-	_own='USE_SYSTEMD'
+	_own='USE_SYSTEMD NGINX_USER'
 	snapshot $_own
 	while :; do
 		head2 "5  systemd"
+		intro "Units to keep nginx running and to hand PtokaX its proxy socket." \
+		      "The nginx unit runs as an unprivileged account, created here."
 		row a "use systemd" "$USE_SYSTEMD" "in effect: $(have_systemd && echo yes || echo no)"
+		row b "nginx runs as" "$NGINX_USER" "$(user_exists "$NGINX_USER" && echo 'exists' || echo 'created when the unit is installed')"
+		say ""
+		row "" "nginx unit"   "$([ -f /etc/systemd/system/nginx-ptokax.service ] && echo installed || echo 'not installed')"
+		row "" "proxy socket" "$([ -n "$HUB" ] && [ -f "/etc/systemd/system/ptokax@$HUB.socket.d/20-proxy.conf" ] && echo installed || echo 'not installed')"
 		say ""
 		act p "install the proxy socket drop-in for ptokax@${HUB:-<hub>}"
 		act n "install a hardened unit for the source-built nginx"
@@ -693,7 +755,8 @@ page_systemd() {
 		act q "discard changes and return"
 		menu
 		case $REPLY_KEY in
-			a) edit USE_SYSTEMD "use systemd" "auto detects /run/systemd/system. yes or no force it." auto yes no ;;
+			a) edit USE_SYSTEMD "use systemd" "auto detects /run/systemd/system, yes and no force it" auto yes no ;;
+			b) edit NGINX_USER "nginx runs as" "User= and Group= on the nginx unit, so nginx never runs as root" ;;
 			p) install_proxy_socket; pause ;;
 			n) install_nginx_unit; pause ;;
 			e) restart_nginx; pause ;;
@@ -806,7 +869,7 @@ main_menu() {
 		row 1 "nginx"        "$(st_nginx)"   ""
 		row 2 "certificate"  "$(st_cert)"    "$CERT_METHOD"
 		row 3 "hub settings" "$(st_hub)"     ""
-		row 4 "nginx config" "$(st_conf)"    ""
+		row 4 "nginx config" "$(st_conf)"    "$(conf_blocked_by)"
 		row 5 "systemd"      "$(st_systemd)" ""
 		act 6 "verify"
 		say ""
