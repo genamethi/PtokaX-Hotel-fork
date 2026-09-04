@@ -6,7 +6,9 @@
 #
 # Root is used for exactly three things, each named before it runs: installing
 # nginx into its prefix, writing files under /etc, and talking to systemd.
-set -eu
+# -e is deliberately absent: a failed action reports and returns to the menu
+# rather than dropping the admin back to a shell mid-setup
+set -u
 
 self=${0##*/}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -166,6 +168,19 @@ priv_write() {
 	else
 		die "need root to write $1"
 	fi
+}
+
+# make install replaces files already under the prefix, so a writable directory
+# holding root-owned content from an earlier install is still not enough
+install_needs_root() {
+	if [ ! -e "$NGINX_PREFIX" ]; then
+		can_write "$(dirname "$NGINX_PREFIX")" && return 1 || return 0
+	fi
+	can_write "$NGINX_PREFIX" || return 0
+	if find "$NGINX_PREFIX" ! -user "$(id -un)" -print 2>/dev/null | head -n1 | grep -q .; then
+		return 0
+	fi
+	return 1
 }
 
 priv_cp()    { if can_write "$2"; then cp "$1" "$2"; else priv cp "$1" "$2"; fi; }
@@ -331,19 +346,26 @@ do_build_nginx() {
 
 	say "  configuring"
 	if can_write "$BUILD_DIR"; then sh -c "$_cfg"; else priv_sh "$_cfg"; fi
+	[ $? -eq 0 ] || { say "  configure failed"; return 0; }
 
 	say "  building"
 	_mk="cd '$BUILD_DIR' && make -j\$(nproc 2>/dev/null || echo 2)"
 	if can_write "$BUILD_DIR"; then sh -c "$_mk"; else priv_sh "$_mk"; fi
+	[ $? -eq 0 ] || { say "  build failed"; return 0; }
 
 	confirm "install to $NGINX_PREFIX?" || { say "  built, not installed"; return 0; }
 	_in="cd '$BUILD_DIR' && make install"
-	if can_write "$NGINX_PREFIX" || can_write "$(dirname "$NGINX_PREFIX")"; then
-		say "  $NGINX_PREFIX is writable by you, installing without root"
-		sh -c "$_in"
-	else
-		priv_sh "$_in"
+
+	if install_needs_root; then
+		priv_sh "$_in" || { say "  install failed"; return 0; }
+	elif ! sh -c "$_in"; then
+		say "  install failed without root, which usually means the prefix holds"
+		say "  files from an earlier install owned by someone else"
+		confirm "retry as root?" || { say "  not installed"; return 0; }
+		priv_sh "$_in" || { say "  install failed"; return 0; }
 	fi
+
+	[ -x "$NGINX_PREFIX/sbin/nginx" ] || { say "  no binary at $NGINX_PREFIX/sbin/nginx"; return 0; }
 
 	NGINX_MODE=prefix
 	save_conf
@@ -786,7 +808,7 @@ main_menu() {
 		row 3 "hub settings" "$(st_hub)"     ""
 		row 4 "nginx config" "$(st_conf)"    ""
 		row 5 "systemd"      "$(st_systemd)" ""
-		row 6 "verify"       ""              ""
+		act 6 "verify"
 		say ""
 		act R "reset everything to defaults"
 		act q "quit"
