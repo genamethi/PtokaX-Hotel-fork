@@ -94,16 +94,29 @@ head2() { printf '\n  %s\n' "$1"; rule; }
 # one or two lines saying what the page achieves, before any field
 intro() { printf '  %s\n' "$1"; [ -n "${2:-}" ] && printf '  %s\n' "$2"; printf '\n'; }
 
-# the command that would install a missing tool on this system
-pkg_hint() {
-	if   command -v pacman >/dev/null 2>&1; then printf 'sudo pacman -S %s' "$1"
-	elif command -v apt    >/dev/null 2>&1; then printf 'sudo apt install %s' "$1"
-	elif command -v dnf    >/dev/null 2>&1; then printf 'sudo dnf install %s' "$1"
-	elif command -v zypper >/dev/null 2>&1; then printf 'sudo zypper install %s' "$1"
-	elif command -v apk    >/dev/null 2>&1; then printf 'sudo apk add %s' "$1"
-	else printf 'install %s with your package manager' "$1"
+# non-interactive install command for this distribution, without the sudo
+pkg_cmd() {
+	if   command -v pacman  >/dev/null 2>&1; then printf 'pacman -S --needed --noconfirm %s' "$1"
+	elif command -v apt-get >/dev/null 2>&1; then printf 'apt-get install -y %s' "$1"
+	elif command -v dnf     >/dev/null 2>&1; then printf 'dnf install -y %s' "$1"
+	elif command -v zypper  >/dev/null 2>&1; then printf 'zypper --non-interactive install %s' "$1"
+	elif command -v apk     >/dev/null 2>&1; then printf 'apk add %s' "$1"
+	else return 1
 	fi
 }
+
+ensure_tool() {
+	_t=$1; _p=${2:-$1}
+	command -v "$_t" >/dev/null 2>&1 && return 0
+	_cmd=$(pkg_cmd "$_p") || { say "  needs $_t"; return 1; }
+	say ""
+	confirm "needs $_t, install it?" || return 1
+	priv_sh "$_cmd" || { say "  install failed"; return 1; }
+	command -v "$_t" >/dev/null 2>&1 || { say "  $_t not on PATH"; return 1; }
+	return 0
+}
+
+tool_note() { command -v "$1" >/dev/null 2>&1 || printf 'needs %s' "$1"; }
 
 # key, label, value, note
 row() {
@@ -332,7 +345,7 @@ page_nginx() {
 }
 
 do_build_nginx() {
-	command -v git >/dev/null 2>&1 || { say "  git not found"; return 0; }
+	ensure_tool git || return 0
 
 	say ""
 	say "  clone     $BUILD_DIR"
@@ -386,8 +399,7 @@ do_build_nginx() {
 	if install_needs_root; then
 		priv_sh "$_in" || { say "  install failed"; return 0; }
 	elif ! sh -c "$_in"; then
-		say "  install failed without root, which usually means the prefix holds"
-		say "  files from an earlier install owned by someone else"
+		say "  install failed, prefix holds files owned by someone else"
 		confirm "retry as root?" || { say "  not installed"; return 0; }
 		priv_sh "$_in" || { say "  install failed"; return 0; }
 	fi
@@ -411,8 +423,7 @@ page_cert() {
 			intro "nginx needs a certificate to terminate TLS." \
 			      "A CA-signed one just works. Self-signed makes DC++ users opt in."
 		fi
-		_cb=$(command -v certbot >/dev/null 2>&1 && echo "" || echo "certbot not installed")
-		row a "method" "$CERT_METHOD" "$([ "$CERT_METHOD" = letsencrypt ] && printf '%s' "$_cb")"
+		row a "method" "$CERT_METHOD" "$([ "$CERT_METHOD" = letsencrypt ] && tool_note certbot)"
 		row b "domain" "$HUB_ADDR"    "name clients connect to"
 		row c "cert"   "$CERT"        "$([ -s "$CERT" ] && echo present || echo missing)"
 		row d "key"    "$KEY"         "$([ -s "$KEY" ] && echo present || echo missing)"
@@ -442,24 +453,16 @@ page_cert() {
 do_cert() {
 	case $CERT_METHOD in
 		letsencrypt)
-			if ! command -v certbot >/dev/null 2>&1; then
-				say ""
-				say "  Let's Encrypt needs certbot, which is not installed."
-				say ""
-				say "      $(pkg_hint certbot)"
-				say ""
-				say "  It also needs $HUB_ADDR to resolve to this host and port 80"
-				say "  free while it runs."
-				say ""
-				confirm "switch to a self-signed certificate instead?" || return 0
+			if ! ensure_tool certbot; then
+				confirm "use a self-signed certificate instead?" || return 0
 				CERT_METHOD=selfsigned
 				save_conf
 				do_cert
 				return 0
 			fi
 			say ""
-			say "  certbot needs $HUB_ADDR to resolve to this host and port 80 free."
-			confirm "run certbot for $HUB_ADDR?" || return 0
+			say "  $HUB_ADDR must resolve here, port 80 must be free"
+			confirm "run certbot?" || return 0
 			priv certbot certonly --standalone -d "$HUB_ADDR" || return 0
 			CERT=/etc/letsencrypt/live/$HUB_ADDR/fullchain.pem
 			KEY=/etc/letsencrypt/live/$HUB_ADDR/privkey.pem
@@ -467,7 +470,7 @@ do_cert() {
 			say "  renewal keeps the key, so the keyprint does not change"
 			;;
 		selfsigned)
-			command -v openssl >/dev/null 2>&1 || { say "  openssl not found"; return 0; }
+			ensure_tool openssl || return 0
 			confirm "generate a self-signed certificate for $HUB_ADDR?" || return 0
 			priv_mkdir "$(dirname "$CERT")"; priv_mkdir "$(dirname "$KEY")"
 			if can_write "$CERT" && can_write "$KEY"; then
@@ -582,7 +585,7 @@ hub_setting_chunk() {
 print_hub_settings() {
 	d=$(hub_state_dir 2>/dev/null || true)
 	say ""
-	say "  with the hub stopped, in ${d:-<state dir>}/cfg/Settings.pxt:"
+	say "  hub stopped, in ${d:-<state dir>}/cfg/Settings.pxt:"
 	say ""
 	hub_setting_lines | sed 's/^/    /'
 	say ""
@@ -601,7 +604,7 @@ apply_via_file() {
 	d=$(hub_state_dir); f=$d/cfg/Settings.pxt
 	[ -f "$f" ] || { say "  no $f"; return 0; }
 	say ""
-	say "  ptokax@$HUB is stopped, so the file is written directly."
+	say "  hub stopped, writing the file directly"
 	confirm "write $f?" || { say "  nothing changed"; return 0; }
 
 	priv_cp "$f" "$f.bak-nmdcs"
@@ -612,19 +615,17 @@ apply_via_file() {
 	hub_setting_lines >> "$tmp"
 	priv_write "$f" < "$tmp"
 	rm -f "$tmp"
-	say "  written, previous file kept as Settings.pxt.bak-nmdcs"
+	say "  written, old file kept as Settings.pxt.bak-nmdcs"
 }
 
 apply_via_console() {
 	if ! rung_console; then
 		say ""
-		say "  ptokax@$HUB is running and its console socket is down. systemd will"
-		say "  not enable a socket whose service is already up, so this costs one"
-		say "  stop and start. Declining changes nothing."
+		say "  hub running, console socket down"
+		say "  enabling it needs one stop and start"
 		say ""
-		confirm "stop ptokax@$HUB, enable the console socket, start it again?" || {
-			say "  nothing changed. The other route is to stop the hub and come"
-			say "  back here, which writes Settings.pxt directly."
+		confirm "stop ptokax@$HUB, enable the socket, start it?" || {
+			say "  unchanged, or stop the hub and come back to write the file"
 			return 0
 		}
 		priv systemctl stop "ptokax@$HUB" || { say "  stop failed, nothing else tried"; return 0; }
@@ -637,10 +638,10 @@ apply_via_console() {
 		i=0
 		while [ $i -lt 10 ] && ! rung_console; do sleep 1; i=$((i + 1)); done
 		rung_console || { say "  console socket still down, giving up"; return 0; }
-		say "  console socket up, and it returns with sockets.target from now on"
+		say "  console socket up, and stays up from now on"
 	fi
 
-	rung_tooling || { say "  needs socat or pxconsole, see ADMIN-GUIDE \"Lua console\""; return 0; }
+	rung_tooling || ensure_tool socat || return 0
 
 	say ""
 	hub_setting_chunk | sed 's/^/    /'
@@ -654,8 +655,7 @@ apply_via_console() {
 		priv_sh "pxconsole '$HUB' attach '$tmp'" || say "  send failed"
 	fi
 	rm -f "$tmp"
-	say "  SetMan.Save writes cfg/ at once, so this survives a restart."
-	say "  journalctl PTOKAX_SUBSYSTEM=console shows the output."
+	say "  saved. journalctl PTOKAX_SUBSYSTEM=console for output"
 }
 
 # --- page 4, nginx config ---------------------------------------------------
@@ -720,7 +720,7 @@ write_conf() {
 		sed -e "s|@STATEDIR@|$d|g" "$here/hubinfo.conf" | priv_write "$CONFD_DIR/ptokax-hubinfo.conf"
 		say "  wrote $CONFD_DIR/ptokax-hubinfo.conf"
 	else
-		say "  pinger snippet skipped, needs both a conf.d dir and a hub state dir"
+		say "  pinger snippet skipped, needs a conf.d dir and a hub state dir"
 	fi
 
 	say ""
@@ -772,9 +772,8 @@ install_proxy_socket() {
 	have_systemd || { say "  systemd is switched off on this page"; return 0; }
 	[ -n "$HUB" ] || { say "  set a hub name on page 3 first"; return 0; }
 	if [ ! -f /etc/systemd/system/ptokax@.socket ] && [ ! -f /usr/lib/systemd/system/ptokax@.socket ]; then
-		say "  ptokax@.socket is not installed, so socket activation is not in use."
-		say "  PtokaX binds TLSProxyAddress itself then, and this drop-in is not"
-		say "  needed. Install the units with: make install"
+		say "  ptokax@.socket not installed, so PtokaX binds TLSProxyAddress"
+		say "  itself and this drop-in is not needed"
 		return 0
 	fi
 	dir=/etc/systemd/system/ptokax@$HUB.socket.d
@@ -794,9 +793,7 @@ install_nginx_unit() {
 	[ -x "$gen" ] || { say "  unitgen.sh not found at $gen"; return 0; }
 
 	if ! user_exists "$NGINX_USER"; then
-		say "  $NGINX_USER does not exist. The unit runs nginx as this account"
-		say "  instead of root, so it has to exist before the unit starts."
-		confirm "create $NGINX_USER as a system user?" || return 0
+		confirm "create system user $NGINX_USER?" || return 0
 		priv useradd --system --no-create-home --shell /usr/sbin/nologin "$NGINX_USER" \
 			|| { say "  useradd failed"; return 0; }
 	fi
