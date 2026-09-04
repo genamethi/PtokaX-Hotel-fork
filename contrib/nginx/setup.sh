@@ -309,6 +309,12 @@ step_state() {
 		hub_tree_ok || { echo "systemd does not know $HUB"; return; }
 		_d=$(hub_state_dir)
 		grep -q '^TLSEnabled[[:space:]]*=[[:space:]]*1' "$_d/cfg/Settings.pxt" 2>/dev/null && { echo done; return; }
+		# a running hub rewrites cfg/ from memory on shutdown, so the file
+		# cannot be edited underneath it
+		if hub_running && ! console_up; then
+			echo "stop the hub, or switch the Lua console on"
+			return
+		fi
 		echo ready ;;
 	conf)
 		nginx_has_stream || { echo "after: build nginx with stream"; return; }
@@ -525,6 +531,24 @@ run_hub() {
 	if hub_running; then run_hub_console; else run_hub_file; fi
 }
 
+# The console is the one genuinely optional piece: everything it does can be
+# done by hand. Say how, rather than leaving a dead end.
+manual_hub_settings() {
+	say "  ptokax@$HUB is running and its console socket is not up, so these"
+	say "  cannot be applied from here. cfg/ is rewritten from memory when the"
+	say "  hub stops, so editing the file underneath it would be lost."
+	say ""
+	say "  any one of these works:"
+	say ""
+	say "    switch the Lua console on, page 3, and run the plan again"
+	say "    systemctl stop ptokax@$HUB, run the plan again, it writes the file"
+	say "    sudo pxctl setup $HUB, which is PtokaX -m with the hub stopped"
+	say ""
+	say "  the three settings, for either of the last two:"
+	say ""
+	hub_setting_lines | sed 's/^/      /'
+}
+
 run_hub_file() {
 	_d=$(hub_state_dir); _f=$_d/cfg/Settings.pxt
 	[ -f "$_f" ] || { say "  no $_f"; return 1; }
@@ -541,7 +565,7 @@ run_hub_file() {
 }
 
 run_hub_console() {
-	console_up || { say "  console socket is down, enable it with the console step"; return 1; }
+	console_up || { manual_hub_settings; return 1; }
 	ensure_tool socat || return 1
 	hub_setting_chunk | sed 's/^/    /'
 	confirm "send this over the console?" || return 1
@@ -714,6 +738,7 @@ page_hub() {
 		row "" "state dir"      "${_sd:-<none>}"
 		row "" "proxy listener" "$PROXY_ADDR" "loopback, PtokaX reads the header here"
 		say ""
+		act p "show the three settings, to apply by hand"
 		act n "create a new hub with pxctl"
 		act r "reset this page"
 		act s "return, keeping changes"
@@ -724,6 +749,10 @@ page_hub() {
 			b) edit TLS_PORT "NMDCS port" "above 1024 needs no capability" ;;
 			c) edit TCP_PORT "plaintext port" "" ;;
 			d) edit ENABLE_CONSOLE "Lua console" "a socket for pxconsole and socat, see ADMIN-GUIDE" yes no ;;
+			p) say ""; say "  in $(hub_state_dir 2>/dev/null || printf '<state dir>')/cfg/Settings.pxt, hub stopped:"
+			   say ""; hub_setting_lines | sed 's/^/      /'
+			   say ""; say "  or over the console, hub running:"
+			   say ""; hub_setting_chunk | sed 's/^/      /'; pause ;;
 			n) create_hub; pause ;;
 			r) reset_vars $_own ;;
 			s) return ;;
