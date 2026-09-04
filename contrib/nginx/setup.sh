@@ -239,14 +239,15 @@ console_up()   { [ -n "$HUB" ] && [ -S "/run/ptokax/$HUB-console.sock" ]; }
 cert_present() { [ -s "$CERT" ] && [ -s "$KEY" ]; }
 file_note() { [ -s "$1" ] && printf present || printf missing; }
 
-# certbot names the directory after the domain itself, so say so rather than
-# leaving it looking like a choice someone made
-cert_dir_note() {
-	[ "$CERT_CUSTOM" = yes ] && { printf yours; return; }
+# Where the pair lives, said once as context. certbot names its directory after
+# the domain and renews into it, which is why that path repeats the domain.
+cert_where() {
+	_cw_d=$(dirname "$CERT")
+	[ "$CERT_CUSTOM" = yes ] && { printf 'your files, in %s' "$_cw_d"; return; }
 	case $CERT_METHOD in
-		letsencrypt) printf "certbot's own layout" ;;
-		selfsigned)  printf "where these get written" ;;
-		*)           printf "point c and d at your files" ;;
+		letsencrypt) printf 'certbot writes and renews into %s' "$_cw_d" ;;
+		selfsigned)  printf 'written to %s, and DC++ users have to opt in' "$_cw_d" ;;
+		*)           printf 'point cert and key at files you already have' ;;
 	esac
 }
 
@@ -636,12 +637,12 @@ page_cert() {
 	snapshot $_own
 	while :; do
 		head2 "3  certificate"
+		intro "$(cert_where)"
 		row a "method" "$CERT_METHOD" "$([ "$CERT_METHOD" = letsencrypt ] && tool_note certbot)"
 		row b "domain" "$HUB_ADDR"    "name clients connect to"
 		# the directory is not a field: certbot owns its own, and pointing at
 		# files elsewhere is done by giving a whole path below
 		if [ "$(dirname "$CERT")" = "$(dirname "$KEY")" ]; then
-			row "" "directory" "$(dirname "$CERT")" "$(cert_dir_note)"
 			row c "cert" "$(basename "$CERT")" "$(file_note "$CERT")"
 			row d "key"  "$(basename "$KEY")"  "$(file_note "$KEY")"
 		else
