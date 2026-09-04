@@ -531,20 +531,10 @@ run_hub() {
 	if hub_running; then run_hub_console; else run_hub_file; fi
 }
 
-# The console is the one genuinely optional piece: everything it does can be
-# done by hand. Say how, rather than leaving a dead end.
+# The console is the one optional piece here. Without it, say what has to be
+# set and leave the how to the admin.
 manual_hub_settings() {
-	say "  ptokax@$HUB is running and its console socket is not up, so these"
-	say "  cannot be applied from here. cfg/ is rewritten from memory when the"
-	say "  hub stops, so editing the file underneath it would be lost."
-	say ""
-	say "  any one of these works:"
-	say ""
-	say "    switch the Lua console on, page 3, and run the plan again"
-	say "    systemctl stop ptokax@$HUB, run the plan again, it writes the file"
-	say "    sudo pxctl setup $HUB, which is PtokaX -m with the hub stopped"
-	say ""
-	say "  the three settings, for either of the last two:"
+	say "  In order to proceed you must set the following in the hub settings:"
 	say ""
 	hub_setting_lines | sed 's/^/      /'
 }
@@ -738,7 +728,6 @@ page_hub() {
 		row "" "state dir"      "${_sd:-<none>}"
 		row "" "proxy listener" "$PROXY_ADDR" "loopback, PtokaX reads the header here"
 		say ""
-		act p "show the three settings, to apply by hand"
 		act n "create a new hub with pxctl"
 		act r "reset this page"
 		act s "return, keeping changes"
@@ -749,10 +738,6 @@ page_hub() {
 			b) edit TLS_PORT "NMDCS port" "above 1024 needs no capability" ;;
 			c) edit TCP_PORT "plaintext port" "" ;;
 			d) edit ENABLE_CONSOLE "Lua console" "a socket for pxconsole and socat, see ADMIN-GUIDE" yes no ;;
-			p) say ""; say "  in $(hub_state_dir 2>/dev/null || printf '<state dir>')/cfg/Settings.pxt, hub stopped:"
-			   say ""; hub_setting_lines | sed 's/^/      /'
-			   say ""; say "  or over the console, hub running:"
-			   say ""; hub_setting_chunk | sed 's/^/      /'; pause ;;
 			n) create_hub; pause ;;
 			r) reset_vars $_own ;;
 			s) return ;;
