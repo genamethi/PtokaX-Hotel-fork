@@ -108,7 +108,8 @@ confirm() {
 	read -r _c || _c=n
 	case $_c in y|Y|yes) return 0 ;; *) return 1 ;; esac
 }
-menu() { printf '\n  > '; read -r KEY || KEY=q; }
+# _key, not KEY: KEY is the certificate key setting and a menu read would clobber it
+menu() { printf '\n  > '; read -r _key || _key=q; }
 
 # --- privilege --------------------------------------------------------------
 can_write() { if [ -e "$1" ]; then [ -w "$1" ]; else [ -w "$(dirname "$1")" ]; fi; }
@@ -157,16 +158,16 @@ pkg_cmd() {
 }
 
 ensure_tool() {
-	_t=$1; _p=${2:-$1}
-	command -v "$_t" >/dev/null 2>&1 && return 0
-	if ! _cmd=$(pkg_cmd "$_p"); then
-		say "  needs $_t, and no package manager this script knows was found"
-		say "  install $_t however this system does it, then run the plan again"
+	_et_tool=$1; _et_pkg=${2:-$1}
+	command -v "$_et_tool" >/dev/null 2>&1 && return 0
+	if ! _et_cmd=$(pkg_cmd "$_et_pkg"); then
+		say "  needs $_et_tool, and no package manager this script knows was found"
+		say "  install $_et_tool however this system does it, then run the plan again"
 		return 1
 	fi
-	confirm "needs $_t, install it?" || return 1
-	priv_sh "$_cmd" || { say "  install failed"; return 1; }
-	command -v "$_t" >/dev/null 2>&1 || { say "  $_t not on PATH"; return 1; }
+	confirm "needs $_et_tool, install it?" || return 1
+	priv_sh "$_et_cmd" || { say "  install failed"; return 1; }
+	command -v "$_et_tool" >/dev/null 2>&1 || { say "  $_et_tool not on PATH"; return 1; }
 	return 0
 }
 tool_note() { command -v "$1" >/dev/null 2>&1 || printf 'needs %s' "$1"; }
@@ -189,14 +190,14 @@ nginx_bin() {
 	esac
 }
 nginx_has_stream() {
-	b=$(nginx_bin); [ -n "$b" ] && [ -x "$b" ] || return 1
-	v=$("$b" -V 2>&1) || return 1
-	printf '%s' "$v" | grep -q -- '--with-stream' &&
-	printf '%s' "$v" | grep -q -- '--with-stream_ssl_module'
+	_nhs_b=$(nginx_bin); [ -n "$_nhs_b" ] && [ -x "$_nhs_b" ] || return 1
+	_nhs_v=$("$_nhs_b" -V 2>&1) || return 1
+	printf '%s' "$_nhs_v" | grep -q -- '--with-stream' &&
+	printf '%s' "$_nhs_v" | grep -q -- '--with-stream_ssl_module'
 }
 nginx_conf_prefix() {
-	b=$(nginx_bin); [ -n "$b" ] && [ -x "$b" ] || return 1
-	"$b" -V 2>&1 | tr ' ' '\n' | sed -n 's/^--conf-path=//p' | sed 's:/[^/]*$::'
+	_ncp_b=$(nginx_bin); [ -n "$_ncp_b" ] && [ -x "$_ncp_b" ] || return 1
+	"$_ncp_b" -V 2>&1 | tr ' ' '\n' | sed -n 's/^--conf-path=//p' | sed 's:/[^/]*$::'
 }
 
 hub_state_dir() {
@@ -302,7 +303,7 @@ page_plan() {
 		else act x "run the $_ready step(s) marked will run"; fi
 		act q "back"
 		menu
-		case $KEY in
+		case $_key in
 			x) [ "$_ready" -gt 0 ] && run_plan; pause ;;
 			q) return ;;
 		esac
@@ -405,9 +406,9 @@ run_cert() {
 
 keyprint_of() {
 	[ -s "$CERT" ] || { printf '<none>'; return; }
-	h=$(openssl x509 -in "$CERT" -outform der 2>/dev/null | openssl dgst -sha256 -binary |
-		base32 2>/dev/null | tr -d '=\n') || h=
-	[ -n "$h" ] && printf 'SHA256/%s' "$h" || printf '<base32 unavailable>'
+	_kp_h=$(openssl x509 -in "$CERT" -outform der 2>/dev/null | openssl dgst -sha256 -binary |
+		base32 2>/dev/null | tr -d '=\n') || _kp_h=
+	[ -n "$_kp_h" ] && printf 'SHA256/%s' "$_kp_h" || printf '<base32 unavailable>'
 }
 show_keyprint() {
 	say "  nmdcs://$HUB_ADDR:$TLS_PORT?kp=$(keyprint_of)"
@@ -439,12 +440,12 @@ run_hub_file() {
 	hub_setting_lines | sed 's/^/    /'
 	confirm "write into $_f?" || return 1
 	priv_cp "$_f" "$_f.bak-nmdcs"
-	_t=$(mktemp); priv_cat "$_f" > "$_t"
+	_tmpf=$(mktemp); priv_cat "$_f" > "$_tmpf"
 	for k in TLSEnabled TLSProxyAddress PingerAddresses; do
-		sed -i "/^#\{0,1\}$k[[:space:]]*=/d" "$_t"
+		sed -i "/^#\{0,1\}$k[[:space:]]*=/d" "$_tmpf"
 	done
-	hub_setting_lines >> "$_t"
-	priv_write "$_f" < "$_t"; rm -f "$_t"
+	hub_setting_lines >> "$_tmpf"
+	priv_write "$_f" < "$_tmpf"; rm -f "$_tmpf"
 	say "  written, old file kept as Settings.pxt.bak-nmdcs"
 }
 
@@ -465,16 +466,16 @@ run_hub_console() {
 	ensure_tool socat || return 1
 	hub_setting_chunk | sed 's/^/    /'
 	confirm "send this over the console?" || return 1
-	_t=$(mktemp); hub_setting_chunk > "$_t"
-	priv_sh "socat -t5 - 'UNIX-CONNECT:/run/ptokax/$HUB-console.sock' < '$_t'" || { rm -f "$_t"; return 1; }
-	rm -f "$_t"
+	_tmpc=$(mktemp); hub_setting_chunk > "$_tmpc"
+	priv_sh "socat -t5 - 'UNIX-CONNECT:/run/ptokax/$HUB-console.sock' < '$_tmpc'" || { rm -f "$_tmpc"; return 1; }
+	rm -f "$_tmpc"
 	say "  saved. journalctl PTOKAX_SUBSYSTEM=console for output"
 }
 
 run_conf() {
 	[ -n "$STREAM_DIR" ] || {
-		_p=$(nginx_conf_prefix) || { say "  cannot read --conf-path"; return 1; }
-		STREAM_DIR=$_p/stream.d; CONFD_DIR=$_p/conf.d
+		_cp=$(nginx_conf_prefix) || { say "  cannot read --conf-path"; return 1; }
+		STREAM_DIR=$_cp/stream.d; CONFD_DIR=$_cp/conf.d
 	}
 	_d=$(hub_state_dir 2>/dev/null || true)
 	priv_mkdir "$STREAM_DIR"
@@ -539,23 +540,24 @@ page_nginx() {
 	snapshot $_own
 	while :; do
 		head2 "1  nginx"
-		b=$(nginx_bin)
+		_pn_b=$(nginx_bin)
 		row a "mode"       "$NGINX_MODE"   "auto, system or prefix"
 		row b "prefix"     "$NGINX_PREFIX" "a source build installs here"
 		row c "source dir" "$BUILD_DIR"    "the git clone is kept here"
 		say ""
-		row "" "binary" "${b:-none found}"
+		row "" "binary" "${_pn_b:-none found}"
 		row "" "stream" "$(nginx_has_stream && echo yes || echo no)" "required, off by default"
 		say ""
 		act r "reset this page"; act s "return, keeping changes"; act q "return, discarding them"
 		menu
-		case $KEY in
+		case $_key in
 			a) edit NGINX_MODE "mode" "auto prefers the prefix build, then PATH" auto system prefix ;;
 			b) edit NGINX_PREFIX "prefix" "" ;;
 			c) edit BUILD_DIR "source dir" "" ;;
 			r) reset_vars $_own ;;
 			s) return ;;
 			q) restore; return ;;
+			*) say "  no such choice" ;;
 		esac
 	done
 }
@@ -573,7 +575,7 @@ page_cert() {
 		act p "show the keyprint"; act r "reset this page"
 		act s "return, keeping changes"; act q "return, discarding them"
 		menu
-		case $KEY in
+		case $_key in
 			a) edit CERT_METHOD "method" "selfsigned needs no network, DC++ users must opt in" letsencrypt selfsigned existing ;;
 			b) edit HUB_ADDR "domain" "" ;;
 			c) edit CERT "cert" "" ;;
@@ -582,6 +584,7 @@ page_cert() {
 			r) reset_vars $_own ;;
 			s) return ;;
 			q) restore; return ;;
+			*) say "  no such choice" ;;
 		esac
 	done
 }
@@ -604,7 +607,7 @@ page_hub() {
 		act l "list hubs known to systemd"; act r "reset this page"
 		act s "return, keeping changes"; act q "return, discarding them"
 		menu
-		case $KEY in
+		case $_key in
 			a) edit HUB "hub name" "" ;;
 			b) edit STATE_DIR "state dir" "empty means ask pxctl" ;;
 			c) edit PROXY_ADDR "TLSProxyAddress" "" ;;
@@ -614,6 +617,7 @@ page_hub() {
 			r) reset_vars $_own ;;
 			s) return ;;
 			q) restore; return ;;
+			*) say "  no such choice" ;;
 		esac
 	done
 }
@@ -628,12 +632,13 @@ page_conf() {
 		say ""
 		act r "reset this page"; act s "return, keeping changes"; act q "return, discarding them"
 		menu
-		case $KEY in
+		case $_key in
 			a) edit STREAM_DIR "stream dir" "included from a stream {} block, not conf.d" ;;
 			b) edit CONFD_DIR "conf.d dir" "" ;;
 			r) reset_vars $_own ;;
 			s) return ;;
 			q) restore; return ;;
+			*) say "  no such choice" ;;
 		esac
 	done
 }
@@ -648,12 +653,13 @@ page_systemd() {
 		say ""
 		act r "reset this page"; act s "return, keeping changes"; act q "return, discarding them"
 		menu
-		case $KEY in
+		case $_key in
 			a) edit USE_SYSTEMD "use systemd" "" auto yes no ;;
 			b) edit NGINX_USER "nginx runs as" "User= and Group= on the unit, so nginx is never root" ;;
 			r) reset_vars $_own ;;
 			s) return ;;
 			q) restore; return ;;
+			*) say "  no such choice" ;;
 		esac
 	done
 }
@@ -707,7 +713,7 @@ main_menu() {
 		act R "reset everything"
 		act q "quit"
 		menu
-		case $KEY in
+		case $_key in
 			1) page_nginx ;; 2) page_cert ;; 3) page_hub ;;
 			4) page_conf ;;  5) page_systemd ;;
 			p) page_plan ;;  v) page_verify ;;
