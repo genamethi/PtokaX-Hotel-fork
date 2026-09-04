@@ -598,9 +598,16 @@ page_cert() {
 		head2 "2  certificate"
 		row a "method" "$CERT_METHOD" "$([ "$CERT_METHOD" = letsencrypt ] && tool_note certbot)"
 		row b "domain" "$HUB_ADDR"    "name clients connect to"
-		row c "directory" "$(dirname "$CERT")" "$([ "$CERT_CUSTOM" = yes ] && echo yours || echo derived)"
-		row d "cert"      "$(basename "$CERT")" "$(file_note "$CERT")"
-		row e "key"       "$(basename "$KEY")"  "$(file_note "$KEY")"
+		# the directory is not a field: certbot owns its own, and pointing at
+		# files elsewhere is done by giving a whole path below
+		if [ "$(dirname "$CERT")" = "$(dirname "$KEY")" ]; then
+			row "" "directory" "$(dirname "$CERT")" "$([ "$CERT_CUSTOM" = yes ] && echo yours || echo derived)"
+			row c "cert" "$(basename "$CERT")" "$(file_note "$CERT")"
+			row d "key"  "$(basename "$KEY")"  "$(file_note "$KEY")"
+		else
+			row c "cert" "$CERT" "$(file_note "$CERT")"
+			row d "key"  "$KEY"  "$(file_note "$KEY")"
+		fi
 		say ""
 		act p "show the keyprint"; act r "reset this page"
 		act s "return, keeping changes"; act q "return, discarding them"
@@ -609,11 +616,14 @@ page_cert() {
 			a) edit CERT_METHOD "method" "selfsigned needs no network, DC++ users must opt in" letsencrypt selfsigned existing
 			   sync_cert_paths ;;
 			b) edit HUB_ADDR "domain" ""; sync_cert_paths ;;
-			c) _cd=$(dirname "$CERT"); edit _cd "directory" "holds both files"
-			   CERT=$_cd/$(basename "$CERT"); KEY=$_cd/$(basename "$KEY"); CERT_CUSTOM=yes ;;
-			d) _cn=$(basename "$CERT"); edit _cn "cert" "a name, or a whole path"
-			   case $_cn in /*) CERT=$_cn ;; *) CERT=$(dirname "$CERT")/$_cn ;; esac; CERT_CUSTOM=yes ;;
-			e) _kn=$(basename "$KEY"); edit _kn "key" "a name, or a whole path"
+			c) _cn=$(basename "$CERT"); edit _cn "cert" "a name, or a whole path"
+			   case $_cn in
+				/*) _old=$(dirname "$CERT"); CERT=$_cn
+				    # a whole path moves the key too when they were together
+				    [ "$(dirname "$KEY")" = "$_old" ] && KEY=$(dirname "$CERT")/$(basename "$KEY") ;;
+				*)  CERT=$(dirname "$CERT")/$_cn ;;
+			   esac; CERT_CUSTOM=yes ;;
+			d) _kn=$(basename "$KEY"); edit _kn "key" "a name, or a whole path"
 			   case $_kn in /*) KEY=$_kn ;; *) KEY=$(dirname "$KEY")/$_kn ;; esac; CERT_CUSTOM=yes ;;
 			p) say ""; show_keyprint; pause ;;
 			r) reset_vars $_own; CERT_CUSTOM=no; sync_cert_paths ;;
