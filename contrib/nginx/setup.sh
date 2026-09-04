@@ -13,7 +13,8 @@ self=${0##*/}
 here=$(cd "$(dirname "$0")" && pwd)
 
 VARS='NGINX_PREFIX NGINX_USER NGINX_MODE BUILD_DIR TLS_PORT PROXY_ADDR TCP_PORT
-      HUB STATE_DIR HUB_ADDR CERT_METHOD CERT KEY CERT_CUSTOM STREAM_DIR CONFD_DIR USE_SYSTEMD'
+      HUB STATE_DIR HUB_ADDR CERT_METHOD CERT KEY CERT_CUSTOM STREAM_DIR CONFD_DIR
+      ENABLE_CONSOLE'
 
 set_defaults() {
 	NGINX_PREFIX=/usr/local/nginx
@@ -34,7 +35,7 @@ set_defaults() {
 	CERT_CUSTOM=no
 	STREAM_DIR=
 	CONFD_DIR=
-	USE_SYSTEMD=auto
+	ENABLE_CONSOLE=yes
 }
 
 set_defaults
@@ -171,12 +172,9 @@ ensure_tool() {
 }
 tool_note() { command -v "$1" >/dev/null 2>&1 || printf 'needs %s' "$1"; }
 
-have_systemd() {
-	case $USE_SYSTEMD in
-		yes) return 0 ;; no) return 1 ;;
-		*) command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] ;;
-	esac
-}
+# The whole fork assumes systemd, so this is a fact about the host rather than
+# something to choose.
+have_systemd() { command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; }
 user_exists() { id -u "$1" >/dev/null 2>&1; }
 
 # --- nginx ------------------------------------------------------------------
@@ -291,21 +289,22 @@ step_state() {
 	case $1 in
 	nginx)
 		nginx_has_stream && { echo done; return; }
-		[ -n "$(nginx_bin)" ] && [ "$NGINX_MODE" = system ] && { echo "packaged nginx has no stream module, set mode to prefix on page 2"; return; }
+		[ -n "$(nginx_bin)" ] && [ "$NGINX_MODE" = system ] && { echo "packaged nginx has no stream module, set mode to prefix on page 1"; return; }
 		echo ready ;;
 	cert)
 		cert_present && { echo done; return; }
 		[ "$CERT_METHOD" = existing ] && { echo "method is existing but $CERT is missing"; return; }
 		echo ready ;;
 	console)
-		have_systemd || { echo "systemd is off on page 1"; return; }
-		[ -n "$HUB" ] || { echo "no hub chosen on page 4"; return; }
+		have_systemd || { echo "this host is not running systemd"; return; }
+		[ -n "$HUB" ] || { echo "no hub chosen on page 3"; return; }
+		[ "$ENABLE_CONSOLE" = yes ] || { echo "switched off on page 3"; return; }
 		hub_tree_ok || { echo "systemd does not know $HUB"; return; }
 		console_enabled && { echo done; return; }
 		console_unit || { echo "ptokax-console@.socket not installed, run make install"; return; }
 		echo ready ;;
 	hub)
-		[ -n "$HUB" ] || { echo "no hub chosen on page 4"; return; }
+		[ -n "$HUB" ] || { echo "no hub chosen on page 3"; return; }
 		command -v pxctl >/dev/null 2>&1 || [ -n "$STATE_DIR" ] || { echo "no pxctl, set a state dir on page 3"; return; }
 		hub_tree_ok || { echo "systemd does not know $HUB"; return; }
 		_d=$(hub_state_dir)
@@ -319,18 +318,18 @@ step_state() {
 		[ -f "$STREAM_DIR/ptokax-nmdcs.conf" ] && { echo done; return; }
 		echo ready ;;
 	user)
-		have_systemd || { echo "systemd is off on page 1"; return; }
+		have_systemd || { echo "this host is not running systemd"; return; }
 		user_exists "$NGINX_USER" && { echo done; return; }
 		echo ready ;;
 	unit)
-		have_systemd || { echo "systemd is off on page 1"; return; }
+		have_systemd || { echo "this host is not running systemd"; return; }
 		[ -f /etc/systemd/system/nginx-ptokax.service ] && { echo done; return; }
 		user_exists "$NGINX_USER" || { echo "after: create the nginx account"; return; }
-		hub_tree_ok || { echo "after: choosing a hub on page 4"; return; }
+		hub_tree_ok || { echo "after: choosing a hub on page 3"; return; }
 		echo ready ;;
 	socket)
-		have_systemd || { echo "systemd is off on page 1"; return; }
-		[ -n "$HUB" ] || { echo "no hub chosen on page 4"; return; }
+		have_systemd || { echo "this host is not running systemd"; return; }
+		[ -n "$HUB" ] || { echo "no hub chosen on page 3"; return; }
 		[ -f "/etc/systemd/system/ptokax@$HUB.socket.d/20-proxy.conf" ] && { echo done; return; }
 		[ -f /etc/systemd/system/ptokax@.socket ] || [ -f /usr/lib/systemd/system/ptokax@.socket ] ||
 			{ echo "ptokax@.socket not installed, PtokaX binds the address itself"; return; }
@@ -624,14 +623,15 @@ run_start() {
 # pages. these only record choices.
 # ============================================================================
 page_nginx() {
-	_own='NGINX_MODE NGINX_PREFIX BUILD_DIR'
+	_own='NGINX_MODE NGINX_PREFIX BUILD_DIR NGINX_USER'
 	snapshot $_own
 	while :; do
-		head2 "2  nginx"
+		head2 "1  nginx"
 		_pn_b=$(nginx_bin)
 		row a "mode"       "$NGINX_MODE"   "auto, system or prefix"
 		row b "prefix"     "$NGINX_PREFIX" "a source build goes here"
 		row c "source dir" "$BUILD_DIR"    "git clone kept here"
+		row d "runs as"    "$NGINX_USER"   "$(user_exists "$NGINX_USER" && echo exists || echo 'not created')"
 		say ""
 		row "" "binary" "${_pn_b:-none found}"
 		row "" "stream" "$(nginx_has_stream && echo yes || echo no)" "required, off by default"
@@ -642,6 +642,7 @@ page_nginx() {
 			a) edit NGINX_MODE "mode" "auto prefers the prefix build, then PATH" auto system prefix ;;
 			b) edit NGINX_PREFIX "prefix" "" ;;
 			c) edit BUILD_DIR "source dir" "" ;;
+			d) edit NGINX_USER "runs as" "User= and Group= on the unit, so nginx is never root" ;;
 			r) reset_vars $_own ;;
 			s) return ;;
 			q) restore; return ;;
@@ -654,7 +655,7 @@ page_cert() {
 	_own='CERT_METHOD HUB_ADDR CERT KEY CERT_CUSTOM'
 	snapshot $_own
 	while :; do
-		head2 "3  certificate"
+		head2 "2  certificate"
 		intro "$(cert_where)"
 		row a "method" "$CERT_METHOD" "$([ "$CERT_METHOD" = letsencrypt ] && tool_note certbot)"
 		row b "domain" "$HUB_ADDR"    "name clients connect to"
@@ -694,19 +695,20 @@ page_cert() {
 }
 
 page_hub() {
-	_own='HUB STATE_DIR TCP_PORT TLS_PORT'
+	_own='HUB STATE_DIR TCP_PORT TLS_PORT ENABLE_CONSOLE'
 	snapshot $_own
 	while :; do
-		head2 "4  PtokaX hub"
+		head2 "3  Hub settings"
 		if ! command -v pxctl >/dev/null 2>&1; then
 			intro "pxctl is not installed, so there are no instances to choose from." \
 			      "Install the units first: make install, from the PtokaX source."
 		elif [ -z "$HUB" ]; then
-			intro "Which hub this NMDCS setup is for. Press a to pick one, n to make one."
+			intro "Which hub this is for. Press a to pick one, n to make one."
 		fi
 		row a "hub"            "${HUB:-<none>}" "$([ -n "$HUB" ] && hub_status_of "$HUB")"
 		row b "NMDCS port"     "$TLS_PORT"      "clients connect here"
 		row c "plaintext port" "$TCP_PORT"      "first entry in TCPPorts"
+		row d "Lua console"    "$ENABLE_CONSOLE" "$(console_enabled && echo 'socket enabled' || echo 'socket not enabled')"
 		say ""
 		_sd=$(hub_state_dir 2>/dev/null || true)
 		row "" "state dir"      "${_sd:-<none>}"
@@ -721,6 +723,7 @@ page_hub() {
 			a) choose_hub; pause ;;
 			b) edit TLS_PORT "NMDCS port" "above 1024 needs no capability" ;;
 			c) edit TCP_PORT "plaintext port" "" ;;
+			d) edit ENABLE_CONSOLE "Lua console" "a socket for pxconsole and socat, see ADMIN-GUIDE" yes no ;;
 			n) create_hub; pause ;;
 			r) reset_vars $_own ;;
 			s) return ;;
@@ -760,27 +763,6 @@ create_hub() {
 	say "  created $HUB"
 }
 
-page_systemd() {
-	_own='USE_SYSTEMD NGINX_USER'
-	snapshot $_own
-	while :; do
-		head2 "1  systemd"
-		row a "use systemd"   "$USE_SYSTEMD" "in effect: $(have_systemd && echo yes || echo no)"
-		row b "nginx runs as" "$NGINX_USER"  "$(user_exists "$NGINX_USER" && echo exists || echo 'not created')"
-		say ""
-		act r "reset this page"; act s "return, keeping changes"; act q "return, discarding them"
-		menu
-		case $_key in
-			a) edit USE_SYSTEMD "use systemd" "" auto yes no ;;
-			b) edit NGINX_USER "nginx runs as" "User= and Group= on the unit, so nginx is never root" ;;
-			r) reset_vars $_own ;;
-			s) return ;;
-			q) restore; return ;;
-			*) say "  no such choice" ;;
-		esac
-	done
-}
-
 page_verify() {
 	head2 "verify"
 	say "  listening"
@@ -818,10 +800,9 @@ main_menu() {
 	while :; do
 		head2 "PtokaX NMDCS setup"
 		intro "Pages record choices. Nothing changes until you run the plan."
-		row 1 "systemd"     "$(have_systemd && echo yes || echo no), runs as $NGINX_USER"
-		row 2 "nginx"       "$NGINX_MODE, $NGINX_PREFIX"
-		row 3 "certificate" "$CERT_METHOD, $HUB_ADDR"
-		row 4 "PtokaX hub"  "${HUB:-<none>}, port $TLS_PORT"
+		row 1 "nginx"        "$NGINX_MODE, $NGINX_PREFIX, runs as $NGINX_USER"
+		row 2 "certificate"  "$CERT_METHOD, $HUB_ADDR"
+		row 3 "hub settings" "${HUB:-<none>}, NMDCS on $TLS_PORT"
 		say ""
 		act p "plan and run          $(plan_summary)"
 		act v "verify a running setup"
@@ -829,9 +810,8 @@ main_menu() {
 		act q "quit"
 		menu
 		case $_key in
-			1) page_systemd ;; 2) page_nginx ;;
-			3) page_cert ;;    4) page_hub ;;
-			p) page_plan ;;    v) page_verify ;;
+			1) page_nginx ;; 2) page_cert ;; 3) page_hub ;;
+			p) page_plan ;;  v) page_verify ;;
 			R) confirm "reset every setting?" && set_defaults ;;
 			q|Q) exit 0 ;;
 		esac
