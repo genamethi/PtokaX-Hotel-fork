@@ -239,6 +239,17 @@ console_up()   { [ -n "$HUB" ] && [ -S "/run/ptokax/$HUB-console.sock" ]; }
 cert_present() { [ -s "$CERT" ] && [ -s "$KEY" ]; }
 file_note() { [ -s "$1" ] && printf present || printf missing; }
 
+# certbot names the directory after the domain itself, so say so rather than
+# leaving it looking like a choice someone made
+cert_dir_note() {
+	[ "$CERT_CUSTOM" = yes ] && { printf yours; return; }
+	case $CERT_METHOD in
+		letsencrypt) printf "certbot's own layout" ;;
+		selfsigned)  printf "where these get written" ;;
+		*)           printf "point c and d at your files" ;;
+	esac
+}
+
 # certbot fixes its own paths and self-signed only needs a convention, so the
 # admin types paths only when pointing at files that already exist
 sync_cert_paths() {
@@ -630,7 +641,7 @@ page_cert() {
 		# the directory is not a field: certbot owns its own, and pointing at
 		# files elsewhere is done by giving a whole path below
 		if [ "$(dirname "$CERT")" = "$(dirname "$KEY")" ]; then
-			row "" "directory" "$(dirname "$CERT")" "$([ "$CERT_CUSTOM" = yes ] && echo yours || echo derived)"
+			row "" "directory" "$(dirname "$CERT")" "$(cert_dir_note)"
 			row c "cert" "$(basename "$CERT")" "$(file_note "$CERT")"
 			row d "key"  "$(basename "$KEY")"  "$(file_note "$KEY")"
 		else
