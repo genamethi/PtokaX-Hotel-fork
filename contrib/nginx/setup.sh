@@ -1,8 +1,9 @@
 #!/bin/sh
 # Interactive setup for NMDCS in front of PtokaX.
 #
-# Pages 1 to 5 only record choices. Nothing on the host changes until the plan
-# is run from the main menu, which is the single point where anything happens.
+# Pages 1 to 5 only record choices, for this run alone. Nothing on the host
+# changes until the plan is run from the main menu, the single point where
+# anything happens.
 #
 # -e is deliberately absent: a failed step reports and returns to the menu
 # rather than dropping the admin to a shell partway through.
@@ -10,8 +11,6 @@ set -u
 
 self=${0##*/}
 here=$(cd "$(dirname "$0")" && pwd)
-
-CONF=${PX_NGINX_SETUP_CONF:-${XDG_CONFIG_HOME:-$HOME/.config}/ptokax-nginx-setup.conf}
 
 VARS='NGINX_PREFIX NGINX_USER NGINX_MODE BUILD_DIR TLS_PORT PROXY_ADDR TCP_PORT
       HUB STATE_DIR HUB_ADDR CERT_METHOD CERT KEY STREAM_DIR CONFD_DIR USE_SYSTEMD'
@@ -36,19 +35,8 @@ set_defaults() {
 }
 
 set_defaults
-[ -f "$CONF" ] && . "$CONF"
 
 quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-
-save_conf() {
-	mkdir -p "$(dirname "$CONF")"
-	{
-		printf '# written by %s\n' "$self"
-		for v in $VARS; do
-			eval "printf '%s=%s\n' \"\$v\" \"\$(quote \"\${$v}\")\""
-		done
-	} > "$CONF"
-}
 
 # --- page state -------------------------------------------------------------
 SNAP=$(mktemp)
@@ -709,7 +697,6 @@ main_menu() {
 		say ""
 		act p "plan and run          $(plan_summary)"
 		act v "verify a running setup"
-		act w "write these choices to $CONF"
 		act R "reset everything"
 		act q "quit"
 		menu
@@ -717,7 +704,6 @@ main_menu() {
 			1) page_nginx ;; 2) page_cert ;; 3) page_hub ;;
 			4) page_conf ;;  5) page_systemd ;;
 			p) page_plan ;;  v) page_verify ;;
-			w) save_conf; say "  written to $CONF" ;;
 			R) confirm "reset every setting?" && set_defaults ;;
 			q|Q) exit 0 ;;
 		esac
@@ -726,7 +712,7 @@ main_menu() {
 
 case ${1:-} in
 	-h|--help)
-		printf 'Usage: %s\n\nInteractive. Choices kept in %s.\nOverride with PX_NGINX_SETUP_CONF.\n' "$self" "$CONF"
+		printf 'Usage: %s\n\nInteractive. Choices last for the session.\n' "$self"
 		exit 0 ;;
 esac
 
