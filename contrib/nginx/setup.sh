@@ -792,7 +792,7 @@ page_verify() {
 	say ""
 	say "  pinger endpoint"
 	command -v curl >/dev/null 2>&1 &&
-		{ curl -sS --max-time 5 "http://$HUB_ADDR/api/v0/hubinfo.json" || say "    no answer"; say ""; }
+		{ curl -sSk --http1.1 --max-time 5 "https://$HUB_ADDR:$TLS_PORT/api/v0/hubinfo.json" || say "    no answer"; say ""; }
 	pause
 }
 

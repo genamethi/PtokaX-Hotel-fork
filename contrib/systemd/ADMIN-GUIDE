@@ -187,7 +187,7 @@ Check there for more info.
 
 	PingerAddresses	=	nmdcs://hub.example.com:5411;dchub://hub.example.com:411
 
-	curl -s http://hub.example.com/api/v0/hubinfo.json
+	curl -s --http1.1 https://hub.example.com:5411/api/v0/hubinfo.json
 
 
 Connection flood limits
