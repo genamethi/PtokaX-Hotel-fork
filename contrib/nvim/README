@@ -1,38 +1,17 @@
-Editing hub scripts with type checking
+Neovim Specific Scripts
+But to be honest. Very Adaptable.
 ======================================
 
-lua-language-server reads the definitions in ptokax-api.lua and gives
-completion, signatures and type errors for the hub API. No plugin, no server
-to write. Any editor with an LSP client works.
-
-  ptokax-api.lua        generated definitions, do not edit
-  gen-api-defs.lua      regenerates them from scripting-interface.txt
   console.lua           client for the hub's Lua console socket
-  px_keymaps.lua        the keymaps below, calling console.lua
-  luarc.json.example    LuaLS - Look up "workspace.library LuaLS"
-
+  utils.lua             <see credit line-adapted from: .....>
+  px_keymaps.lua        the keymaps below.
 
 Setup
 -----
 
-It's cleanest to put this in your nvim config folder, imo. But check your
-runtime path. I just copy this tree directly into ~/.config/nvim/. Hence,
-the json has the workspace path named accordingly. The .luarc.json is named
-so it won't be hidden by default. Rename before moving.
-
-You can just change the workspace.library path yourself, as well.
-
-~/.config/nvim
-├── lua
-│   ├── config
-│   │   └── px_keymaps.lua
-│   ├── pxapi
-│   │   ├── console.lua
-│   │   ├── gen-api-defs.lua
-│   │   └── ptokax-api.lua
-│   └── utils.lua
-├── README
-└── .luarc.json
+It's a Neovim plugin. You can drop it in your ~/.config/nvim/lua folder
+then add to your init.lua or however you do local plugins with your
+setup. I don't know your life.
 
 Keymaps:
 
@@ -43,45 +22,4 @@ Keymaps:
 	<leader>pi	choose a different hub
 	<leader>pd	detach buffer
 
-Uppercase variants cache sudo.
-
-Event functions need annotating
--------------------------------
-
-LuaLS doesn't do parameter types from global, so tUser is
-unknown until specified: 
-
-	--- @param tUser User
-	--- @param sData string
-	function ChatArrival(tUser, sData)
-		Core.SendToAll(tUser.sNick .. sData)
-	end
-
-Followed by <leader>pa to save. Put the cursor on the function line and it
-inserts one --- @param per argument.
-
-Regenerating
-------------
-
-	lua contrib/nvim/gen-api-defs.lua scripting.docs/scripting-interface.txt \
-	    > contrib/nvim/lua/pxapi/ptokax-api.lua
-
-Parameter types come from the Hungarian prefix on each name: s string, i and u
-integer, b boolean, n number, f function, t table. tUser maps to the User
-class. Names the rule cannot type are in the OVERRIDE table near the top.
-
-Return types come from the RETURNS table, keyed Namespace.Function. Anything
-not listed falls back to reading the description, which gives boolean? for
-"Return nil when failed, true when success", table for "Return table with",
-and any otherwise. Add to RETURNS rather than improving the prose reader.
-
-
-Known gaps
-----------
-
-Overloads are emitted in document order, so the first form listed is the one
-signature help shows first. Core.GetOnlineUsers has four. 
-
-Functions taking sNick/sIP alternatives are typed from the first name only,
-so BanMan.GetBan is string either way.
-
+Uppercase second letter will cache sudo.

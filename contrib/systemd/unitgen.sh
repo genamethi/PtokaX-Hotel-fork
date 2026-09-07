@@ -3,7 +3,7 @@
 #
 #   unitgen.sh --systemd-version=N [--define name=value]... < in > out
 #
-# Two guard forms are understood:
+# Two guard forms:
 #
 #   Directive=value        #@since N     drop the line when target < N
 #   #@if systemd >= N  / #@elif systemd >= N / #@else / #@endif
@@ -16,24 +16,40 @@ version=
 defines=
 
 usage() {
-	cat >&2 <<'EOF'
+  cat >&2 <<'EOF'
 Usage: unitgen.sh --systemd-version=N [--define name=value]... < template > unit
 EOF
 }
 
-for arg do
-	case $arg in
-	--systemd-version=*) version=${arg#*=} ;;
-	--define=*) defines="$defines ${arg#*=}" ;;
-	--define) usage; exit 2 ;;
-	-h|--help) usage; exit 0 ;;
-	*) printf 'unitgen.sh: unknown argument %s\n' "$arg" >&2; usage; exit 2 ;;
-	esac
+for arg; do
+  case $arg in
+  --systemd-version=*) version=${arg#*=} ;;
+  --define=*) defines="$defines ${arg#*=}" ;;
+  --define)
+    usage
+    exit 2
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    printf 'unitgen.sh: unknown argument %s\n' "$arg" >&2
+    usage
+    exit 2
+    ;;
+  esac
 done
 
 case $version in
-'' ) printf 'unitgen.sh: --systemd-version is required\n' >&2; exit 2 ;;
-*[!0-9]* ) printf 'unitgen.sh: --systemd-version must be a number, got %s\n' "$version" >&2; exit 2 ;;
+'')
+  printf 'unitgen.sh: --systemd-version is required\n' >&2
+  exit 2
+  ;;
+*[!0-9]*)
+  printf 'unitgen.sh: --systemd-version must be a number, got %s\n' "$version" >&2
+  exit 2
+  ;;
 esac
 
 awk -v target="$version" -v defines="$defines" '

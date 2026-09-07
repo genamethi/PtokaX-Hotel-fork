@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/LLS-Addons/main/schemas/addon_config.schema.json",
+  "name": "PtokaX Lua API",
+  "words": [
+    "pxlua%-api",
+    "ptokax",
+    "Core%.",
+    "SetMan%.",
+    "ProfMan%."
+  ],
+  "files": [
+    "ptokax-api.lua"
+  ],
+  "settings": {
+    "Lua.workspace.ignoreDir": [
+      "unlikely-example-to-ignore"
+    ],
+    "Lua.diagnostics.globals": [
+      "Core"
+    ],
+    "Lua.diagnostics.severity": {
+      "undefined-global": "Error",
+      "undefined-field": "Error",
+      "param-type-mismatch": "Error",
+      "assign-type-mismatch": "Warning",
+      "return-type-mismatch": "Warning",
+      "missing-parameter": "Warning",
+      "redundant-parameter": "Warning",
+      "cast-local-type": "Error",
+      "need-check-nil": "Error"
+    },
+    "Lua.type": {
+      "weakUnionCheck": true,
+      "weakNilCheck": false,
+      "castNumberToInteger": false
+    },
+    "Lua.hint": {
+      "enable": true,
+      "paramType": true
+    }
+  }
+}

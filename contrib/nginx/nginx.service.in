@@ -1,25 +1,21 @@
-# nginx built from source, for hubs that need the stream module a distro package
-# omits. A distro nginx package ships its own unit; this replaces it only when the
-# packaged binary has no --with-stream.
+# nginx built from source with stream module.
 #
 # Runs unprivileged. The NMDCS port is above 1024, so no capability is needed at
 # all; see the capability note below if you move it to 411 or 443.
 #
-# Rendered by unitgen.sh, same as the PtokaX units. Do not install directly.
 
 [Unit]
-Description=nginx terminating NMDCS for PtokaX
-Documentation=file:@docdir@/ADMIN-GUIDE
+Description=nginx reverse proxy for PtokaX NMDCS
 After=network.target
 Wants=ptokax.target
 
 [Service]
-Type=forking
+Type=notify-reload
 User=@NGINXUSER@
 Group=@NGINXUSER@
 
 # nginx is compiled for a pid path the user cannot write, so it is overridden on the
-# command line together with the directory systemd creates for it.
+# command line together with the directory systemd creates.
 RuntimeDirectory=nginx
 PIDFile=/run/nginx/nginx.pid
 # client_body_temp and proxy_temp
@@ -40,18 +36,17 @@ SyslogIdentifier=nginx-ptokax
 LimitNOFILE=65536
 
 # --- privilege --------------------------------------------------------------
-# Nothing is retained. A port below 1024 needs these two instead:
+# A port below 1024 needs these two instead:
 #   CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 #   AmbientCapabilities=CAP_NET_BIND_SERVICE
-# The `user` directive in nginx.conf only applies to a root master and warns here,
-# so leave it out of the config this unit runs.
+# The `user` directive in nginx.conf only applies to a root master and warns here
 CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
 UMask=0077
 
 # --- filesystem -------------------------------------------------------------
-# The hub state directory holds hubinfo.json, which nginx serves and never writes.
+# The hub state directory contains hubinfo.json, which nginx serves ro. 
 ProtectSystem=strict
 ProtectHome=yes
 ReadOnlyPaths=@STATEDIR@

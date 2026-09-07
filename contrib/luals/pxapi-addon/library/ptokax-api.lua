@@ -691,9 +691,9 @@ SetMan.tBooleans = {}
 --- @field MyinfoTime integer MyINFO deflood time. Higher than 0, max 29999.
 --- @field MyinfoAction integer MyINFO deflood action. 0 = disabled, 1 = ignore, 2 = warn, 3 = disconnect, 4 = kick, 5 = tempban, 6 = permban. Max 6.
 --- @field GetnicklistMessages integer GetNickList deflood messages count. Higher than 0, max 29999.
---- @field GetnicklistTime integer GetNickList deflood time. Higher than 0, max 29999. 
+--- @field GetnicklistTime integer GetNickList deflood time. Higher than 0, max 29999.
 --- @field GetnicklistAction integer GetNickList deflood action. 0 = disabled, 1 = ignore, 2 = warn, 3 = disconnect, 4 = kick, 5 = tempban, 6 = permban. Max 6.
---- @field NewConnectionsCount integer Connection deflood connecions count. Higher than 0, max 999. 
+--- @field NewConnectionsCount integer Connection deflood connecions count. Higher than 0, max 999.
 --- @field NewConnectionsTime integer Connection deflood time. Higher than 0, max 999.
 --- @field DefloodWarningCount integer Deflood warnings count. Higher than 0, max 29999.
 --- @field DefloodWarningAction integer Deflood warnings action. 0 = disconnect, 1 = kick, 2 = tempban, 3 = permban. Max 3.
@@ -878,4 +878,3 @@ SetMan.tStrings = {}
 ProfMan.tPermissions = {}
 
 --- @alias PtokaXArrival fun(tUser: User, sData: string): boolean?
-

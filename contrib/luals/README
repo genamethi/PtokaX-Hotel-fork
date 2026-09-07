@@ -1,0 +1,74 @@
+PX Core-API LuaLS Addon
+======================================
+
+This works with any editor running lua-language-server. It's built
+from the addon-template. This works better than a workspace library
+since multiple projects in different directories may be using the API.
+
+  ptokax-api.lua        generated definitions, do not edit
+  gen-api-defs.lua      regenerates them from scripting-interface.txt
+
+Setup
+-----
+
+Drop wherever works for you. The hope is that the addon gets autodetected.
+
+Then wherever it settles just add the name of the directory that contains
+the pxapi-addon folder to your Lua.workspace.userThirdParty value.
+
+For instance, if you use a .luarc.json file placed in your scripts folder
+and your LusLS Addons folder is in ~/.local/share/luals/addons should be
+placed in your .luarc.json. Then when opening your IDE/Editor LuaLS should
+read the json file and load the addon (if the script file matches nicely.)
+
+JSON
+
+{
+  "Lua.workspace.userThirdParty": ["/home/username/.local/share/luals/addons"]
+}
+
+
+See here: https://luals.github.io/wiki/addons/#addon-manager
+
+
+Event functions need annotating
+-------------------------------
+
+LuaLS doesn't do parameter types from global, so tUser is
+unknown until specified: 
+
+	--- @param tUser User
+	--- @param sData string
+	function ChatArrival(tUser, sData)
+		Core.SendToAll(tUser.sNick .. sData)
+	end
+
+Followed by <leader>pa to save. Put the cursor on the function line and it
+inserts one --- @param per argument.
+
+Generation of definitions file
+------------------------------
+
+	lua contrib/nvim/gen-api-defs.lua scripting.docs/scripting-interface.txt \
+	    > contrib/nvim/lua/pxapi/ptokax-api.lua
+
+Names the rule cannot type are in the OVERRIDE table near the top.
+
+It's mostly obvious how the scripting-interface text corresponds to the 
+terms as defined. The Hungarian Notation convention helps us along. Returns
+come from the table of returns. 
+
+Anything not listed falls back to reading the description, which gives boolean?
+for "Return nil when failed, true when success" (this is wrong-ish),
+table for "Return table with", and any otherwise.
+
+
+Known gaps
+----------
+
+Overloads are emitted in document order, so the first form listed is the one
+signature help shows first. Core.GetOnlineUsers has four. 
+
+Functions taking sNick/sIP alternatives are typed from the first name only,
+so BanMan.GetBan is string either way.
+
