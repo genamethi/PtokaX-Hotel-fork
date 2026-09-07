@@ -11,25 +11,24 @@ VARS='NGINX_PREFIX NGINX_USER NGINX_MODE BUILD_DIR TLS_PORT PROXY_ADDR TCP_PORT
       ENABLE_CONSOLE CERT_CHALLENGE'
 
 set_defaults() {
-  NGINX_PREFIX=/usr/local/nginx
-  NGINX_USER=nginx
-  NGINX_MODE=auto
-  BUILD_DIR=/usr/local/src/nginx
-  # 5411 is what clients reach, 5412 is the loopback hop nginx proxies to.
-  TLS_PORT=5411
-  PROXY_ADDR=127.0.0.1:5412
-  TCP_PORT=411
-  HUB=
-  STATE_DIR=
-  HUB_ADDR=hub.example.com
-  CERT_METHOD=letsencrypt
-  CERT_CHALLENGE=http
-  CERT=/etc/letsencrypt/live/hub.example.com/fullchain.pem
-  KEY=/etc/letsencrypt/live/hub.example.com/privkey.pem
-  CERT_CUSTOM=no
-  STREAM_DIR=
-  CONFD_DIR=
-  ENABLE_CONSOLE=yes
+  NGINX_PREFIX=${NGINX_PREFIX:-/usr/local/nginx}
+  NGINX_USER=${NGINX_USER:-nginx}
+  NGINX_MODE=${NGINX_MODE:-auto}
+  BUILD_DIR=${BUILD_DIR:-/usr/local/src/nginx}
+  TLS_PORT=${TLS_PORT:-5411}
+  PROXY_ADDR=${PROXY_ADDR:-127.0.0.1:5412}
+  TCP_PORT=${TCP_PORT:-411}
+  HUB=${HUB:-}
+  STATE_DIR=${STATE_DIR:-}
+  HUB_ADDR=${HUB_ADDR:-hub.example.com}
+  CERT_METHOD=${CERT_METHOD:-letsencrypt}
+  CERT_CHALLENGE=${CERT_CHALLENGE:-http}
+  CERT=${CERT:-/etc/letsencrypt/live/hub.example.com/fullchain.pem}
+  KEY=${KEY:-/etc/letsencrypt/live/hub.example.com/privkey.pem}
+  CERT_CUSTOM=${CERT_CUSTOM:-no}
+  STREAM_DIR=${STREAM_DIR:-}
+  CONFD_DIR=${CONFD_DIR:-}
+  ENABLE_CONSOLE=${ENABLE_CONSOLE:-yes}
 }
 
 set_defaults
@@ -971,6 +970,16 @@ page_nginx() {
     row "" "binary" "${_pn_b:-none found}"
     row "" "stream" "$(nginx_has_stream && echo yes || echo no)" "required, off by default"
     say ""
+
+    # --- Dynamic Run Action ---
+    _st_nginx=$(step_state "nginx")
+    case $_st_nginx in
+    done) act x "run nginx step (already done)" ;;
+    ready) act x "run nginx step now" ;;
+    *) printf '%s    %-3s %s%s\n' "$DIM" "x" "run nginx step now ($_st_nginx)" "$OFF" ;;
+    esac
+    # --------------------------
+
     act r "reset this page"
     act s "return, keeping changes"
     act q "return, discarding them"
@@ -980,6 +989,17 @@ page_nginx() {
     b) edit NGINX_PREFIX "prefix" "" ;;
     c) edit BUILD_DIR "source dir" "" ;;
     d) edit NGINX_USER "runs as" "User= and Group= on the unit, so nginx is never root" ;;
+    x)
+      if [ "$_st_nginx" = "ready" ] || [ "$_st_nginx" = "done" ]; then
+        say ""
+        say "== Running nginx step"
+        run_build
+        pause
+      else
+        say "  Step cannot be run yet: $_st_nginx"
+        sleep 1
+      fi
+      ;;
     r) reset_vars $_own ;;
     s) return ;;
     q)
@@ -1009,6 +1029,16 @@ page_cert() {
     [ "$CERT_METHOD" = letsencrypt ] &&
       row e "challenge" "$CERT_CHALLENGE" "$([ "$CERT_CHALLENGE" = http ] && echo 'needs inbound 80' || echo 'no inbound port')"
     say ""
+
+    # --- Dynamic Run Action ---
+    _st_cert=$(step_state "cert")
+    case $_st_cert in
+    done) act x "run cert step (already done)" ;;
+    ready) act x "run cert step now" ;;
+    *) printf '%s    %-3s %s%s\n' "$DIM" "x" "run cert step now ($_st_cert)" "$OFF" ;;
+    esac
+    # --------------------------
+
     act p "show the keyprint"
     act r "reset this page"
     act s "return, keeping changes"
@@ -1042,6 +1072,17 @@ page_cert() {
       edit _kn "key" "a name, or a whole path"
       case $_kn in /*) KEY=$_kn ;; *) KEY=$(dirname "$KEY")/$_kn ;; esac
       CERT_CUSTOM=yes
+      ;;
+    x)
+      if [ "$_st_cert" = "ready" ] || [ "$_st_cert" = "done" ]; then
+        say ""
+        say "== Running cert step"
+        run_cert
+        pause
+      else
+        say "  Step cannot be run yet: $_st_cert"
+        sleep 1
+      fi
       ;;
     p)
       say ""
@@ -1083,6 +1124,16 @@ page_hub() {
     row "" "state dir" "${_sd:-<none>}"
     row "" "proxy listener" "$PROXY_ADDR" "loopback, PtokaX reads the header here"
     say ""
+
+    # --- Dynamic Run Action ---
+    _st_hub=$(step_state "hub")
+    case $_st_hub in
+    done) act x "run hub settings step (already done)" ;;
+    ready) act x "run hub settings step now" ;;
+    *) printf '%s    %-3s %s%s\n' "$DIM" "x" "run hub settings step now ($_st_hub)" "$OFF" ;;
+    esac
+    # --------------------------
+
     act n "create a new hub with pxctl"
     act r "reset this page"
     act s "return, keeping changes"
@@ -1096,6 +1147,17 @@ page_hub() {
     b) edit TLS_PORT "NMDCS port" "above 1024 needs no capability" ;;
     c) edit TCP_PORT "plaintext port" "" ;;
     d) edit ENABLE_CONSOLE "Lua console" "a socket for pxconsole and socat, see ADMIN-GUIDE" yes no ;;
+    x)
+      if [ "$_st_hub" = "ready" ] || [ "$_st_hub" = "done" ]; then
+        say ""
+        say "== Running hub settings step"
+        run_hub
+        pause
+      else
+        say "  Step cannot be run yet: $_st_hub"
+        sleep 1
+      fi
+      ;;
     n)
       create_hub
       pause
@@ -1223,8 +1285,20 @@ main_menu() {
 
 case ${1:-} in
 -h | --help)
-  printf 'Usage: %s\n\nInteractive. Choices last for the session.\n' "$self"
+  printf 'Usage: %s [step]\n\nInteractive by default, or run a single step directly.\nSteps: %s\n' "$self" "$STEPS"
   exit 0
+  ;;
+*)
+  if [ -n "${1:-}" ]; then
+    for st in $STEPS; do
+      if [ "$st" = "$1" ]; then
+        say "== Running single step: $1 ($(step_label "$1"))"
+        step_run "$1"
+        exit $?
+      fi
+    done
+    die "unknown step '$1'. Available steps: $STEPS"
+  fi
   ;;
 esac
 
