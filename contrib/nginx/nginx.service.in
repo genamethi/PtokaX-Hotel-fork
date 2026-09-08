@@ -10,7 +10,7 @@ After=network.target
 Wants=ptokax.target
 
 [Service]
-Type=notify-reload
+Type=simple
 User=@NGINXUSER@
 Group=@NGINXUSER@
 
@@ -23,7 +23,7 @@ StateDirectory=nginx
 LogsDirectory=nginx
 
 ExecStartPre=@NGINXBIN@ -t -g 'pid /run/nginx/nginx.pid; error_log stderr;'
-ExecStart=@NGINXBIN@ -g 'pid /run/nginx/nginx.pid; error_log stderr;'
+ExecStart=@NGINXBIN@ -g 'daemon off; pid /run/nginx/nginx.pid; error_log stderr;'
 ExecReload=@NGINXBIN@ -s reload -g 'pid /run/nginx/nginx.pid; error_log stderr;'
 ExecStop=@NGINXBIN@ -s quit -g 'pid /run/nginx/nginx.pid; error_log stderr;'
 

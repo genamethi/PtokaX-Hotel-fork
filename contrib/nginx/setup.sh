@@ -10,29 +10,6 @@ VARS='NGINX_PREFIX NGINX_USER NGINX_MODE BUILD_DIR TLS_PORT PROXY_ADDR TCP_PORT
       HUB STATE_DIR HUB_ADDR CERT_METHOD CERT KEY CERT_CUSTOM STREAM_DIR CONFD_DIR
       ENABLE_CONSOLE CERT_CHALLENGE'
 
-set_defaults() {
-  NGINX_PREFIX=${NGINX_PREFIX:-/usr/local/nginx}
-  NGINX_USER=${NGINX_USER:-nginx}
-  NGINX_MODE=${NGINX_MODE:-auto}
-  BUILD_DIR=${BUILD_DIR:-/usr/local/src/nginx}
-  TLS_PORT=${TLS_PORT:-5411}
-  PROXY_ADDR=${PROXY_ADDR:-127.0.0.1:5412}
-  TCP_PORT=${TCP_PORT:-411}
-  HUB=${HUB:-}
-  STATE_DIR=${STATE_DIR:-}
-  HUB_ADDR=${HUB_ADDR:-hub.example.com}
-  CERT_METHOD=${CERT_METHOD:-letsencrypt}
-  CERT_CHALLENGE=${CERT_CHALLENGE:-http}
-  CERT=${CERT:-/etc/letsencrypt/live/hub.example.com/fullchain.pem}
-  KEY=${KEY:-/etc/letsencrypt/live/hub.example.com/privkey.pem}
-  CERT_CUSTOM=${CERT_CUSTOM:-no}
-  STREAM_DIR=${STREAM_DIR:-}
-  CONFD_DIR=${CONFD_DIR:-}
-  ENABLE_CONSOLE=${ENABLE_CONSOLE:-yes}
-}
-
-set_defaults
-
 quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # --- page state -------------------------------------------------------------
@@ -157,7 +134,8 @@ priv_write() {
     cat >"$1"
   elif command -v sudo >/dev/null 2>&1; then
     printf '  root: write %s\n' "$1"
-    sudo tee "$1" >/dev/null
+    sudo tee "$1"
+    #    sudo tee "$1" >/dev/null
   else die "need root to write $1"; fi
 }
 priv_cp() { if can_write "$2"; then cp "$1" "$2"; else priv cp "$1" "$2"; fi; }
@@ -338,7 +316,7 @@ cert_where() {
 sync_cert_paths() {
   [ "$CERT_CUSTOM" = yes ] && return 0
   case $CERT_METHOD in
-  letsencrypt)
+  letsencrypt | existing)
     CERT=/etc/letsencrypt/live/$HUB_ADDR/fullchain.pem
     KEY=/etc/letsencrypt/live/$HUB_ADDR/privkey.pem
     ;;
@@ -348,6 +326,36 @@ sync_cert_paths() {
     ;;
   esac
 }
+
+set_defaults() {
+  [ -f "$here/setup.conf" ] && . "$here/setup.conf" 2>/dev/null || true
+
+  NGINX_PREFIX=${NGINX_PREFIX:-/usr/local/nginx}
+  NGINX_USER=${NGINX_USER:-nginx}
+  NGINX_MODE=${NGINX_MODE:-auto}
+  BUILD_DIR=${BUILD_DIR:-/usr/local/src/nginx}
+  TLS_PORT=${TLS_PORT:-5411}
+  PROXY_ADDR=${PROXY_ADDR:-127.0.0.1:5412}
+  TCP_PORT=${TCP_PORT:-411}
+  HUB=${HUB:-}
+  STATE_DIR=${STATE_DIR:-}
+  HUB_ADDR=${HUB_ADDR:-hub.example.com}
+  CERT_METHOD=${CERT_METHOD:-letsencrypt}
+  CERT_CHALLENGE=${CERT_CHALLENGE:-http}
+  CERT=${CERT:-/etc/letsencrypt/live/hub.example.com/fullchain.pem}
+  KEY=${KEY:-/etc/letsencrypt/live/hub.example.com/privkey.pem}
+  CERT_CUSTOM=${CERT_CUSTOM:-no}
+  STREAM_DIR=${STREAM_DIR:-}
+  CONFD_DIR=${CONFD_DIR:-}
+  ENABLE_CONSOLE=${ENABLE_CONSOLE:-yes}
+
+  # Re-sync if cache contains placeholder paths
+  case "$CERT" in
+  */hub.example.com/*) sync_cert_paths ;;
+  esac
+}
+
+set_defaults
 
 STEPS='user nginx cert console hub socket conf unit start'
 
@@ -384,6 +392,11 @@ step_state() {
       return
     }
     [ "$CERT_METHOD" = existing ] && {
+      if [ "$(file_note "$CERT")" = "cannot read, needs root" ] ||
+        [ "$(file_note "$KEY")" = "cannot read, needs root" ]; then
+        echo ready
+        return
+      fi
       echo "method is existing but $CERT is missing"
       return
     }
@@ -454,8 +467,10 @@ step_state() {
       return
     }
     [ -f "$STREAM_DIR/ptokax-nmdcs.conf" ] && {
-      echo done
-      return
+      grep -q "ssl_certificate $CERT;" "$STREAM_DIR/ptokax-nmdcs.conf" 2>/dev/null && {
+        echo done
+        return
+      }
     }
     echo ready
     ;;
@@ -510,6 +525,7 @@ step_state() {
     echo ready
     ;;
   start)
+    [ -n "$STREAM_DIR" ] || STREAM_DIR=$(nginx_conf_prefix 2>/dev/null)/stream.d
     [ -n "$STREAM_DIR" ] && [ -f "$STREAM_DIR/ptokax-nmdcs.conf" ] || {
       echo "after: write the nginx config"
       return
@@ -640,11 +656,27 @@ run_build() {
     say "  no binary at $NGINX_PREFIX/sbin/nginx"
     return 1
   }
+
+  # Immediately overwrite Nginx's stock port 80 template with a clean master config
+  _cp=$(nginx_conf_prefix)
+  if [ -n "$_cp" ]; then
+    _master_conf="$_cp/nginx.conf"
+    priv_mkdir "$_cp/stream.d"
+    priv_mkdir "$_cp/conf.d"
+    {
+      printf 'worker_processes auto;\n\nevents {\n    worker_connections 1024;\n}\n\n'
+      printf 'stream {\n    include %s/stream.d/*.conf;\n}\n\n' "$_cp"
+      printf 'http {\n    include %s/conf.d/*.conf;\n}\n' "$_cp"
+    } | priv_write "$_master_conf"
+    say "  wrote clean master config to $_master_conf"
+  fi
+
   NGINX_MODE=prefix
   say "  installed $(nginx_bin)"
 }
 
 run_cert() {
+  sync_cert_paths
   case $CERT_METHOD in
   letsencrypt)
     if ! ensure_tool certbot; then
@@ -659,7 +691,7 @@ run_cert() {
     fi
     say "  needs $HUB_ADDR resolving here and inbound 80 from the internet"
     confirm "run certbot?" || return 1
-    if ! priv certbot certonly --standalone -d "$HUB_ADDR"; then
+    priv certbot certonly --standalone -d "$HUB_ADDR" || {
       say ""
       say "  certbot could not prove the domain over port 80."
       say "  switching challenge to dns avoids the port entirely."
@@ -669,7 +701,7 @@ run_cert() {
       sync_cert_paths
       run_cert
       return $?
-    fi
+    }
     say "  renewal keeps the key, so the keyprint stays the same"
     ;;
   selfsigned)
@@ -691,7 +723,23 @@ run_cert() {
     }
     show_keyprint
     ;;
-  existing) say "  using $CERT and $KEY unchanged" ;;
+  existing)
+    priv test -s "$CERT" && priv test -s "$KEY" || {
+      say "  could not verify $CERT and $KEY"
+      return 1
+    }
+    say "  using $CERT and $KEY unchanged"
+    ;;
+  esac
+
+  # Grant unprivileged nginx user read access to root-restricted cert paths
+  case "$CERT" in
+  /etc/letsencrypt/*)
+    if command -v setfacl >/dev/null 2>&1; then
+      priv setfacl -R -m "u:$NGINX_USER:rX" /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null || true
+      say "  granted $NGINX_USER read access to letsencrypt certificates via ACL"
+    fi
+    ;;
   esac
 }
 
@@ -873,7 +921,7 @@ run_hub_console() {
 }
 
 run_conf() {
-  [ -n "$STREAM_DIR" ] || {
+  [ -n "$STREAM_DIR" ] && [ -n "$CONFD_DIR" ] || {
     _cp=$(nginx_conf_prefix)
     [ -n "$_cp" ] || {
       say "  cannot work out the nginx config directory from nginx -V"
@@ -882,20 +930,27 @@ run_conf() {
     STREAM_DIR=$_cp/stream.d
     CONFD_DIR=$_cp/conf.d
   }
+
+  priv_mkdir /var/log/nginx
+  priv_mkdir /var/lib/nginx
+  priv chown -R "$NGINX_USER:$NGINX_USER" /var/log/nginx /var/lib/nginx 2>/dev/null || true
+
   _d=$(hub_state_dir 2>/dev/null || true)
   priv_mkdir "$STREAM_DIR"
+
+  # Write the hub-specific NMDCS stream rule
   sed -e "s|@TLSPORT@|$TLS_PORT|g" -e "s|@TCPPORT@|$TCP_PORT|g" \
     -e "s|@CERT@|$CERT|g" -e "s|@KEY@|$KEY|g" \
     -e "s|@PROXYADDR@|$PROXY_ADDR|g" -e "s|@HUBADDR@|$HUB_ADDR|g" \
     "$here/stream.conf" | priv_write "$STREAM_DIR/ptokax-nmdcs.conf"
   say "  wrote $STREAM_DIR/ptokax-nmdcs.conf"
+
+  # Write the hub-specific pinger http rule if state dir exists
   if [ -n "$CONFD_DIR" ] && [ -n "$_d" ]; then
     priv_mkdir "$CONFD_DIR"
     sed -e "s|@STATEDIR@|$_d|g" "$here/hubinfo.conf" | priv_write "$CONFD_DIR/ptokax-hubinfo.conf"
     say "  wrote $CONFD_DIR/ptokax-hubinfo.conf"
   fi
-  say "  nginx.conf needs, outside http {}:"
-  say "      stream { include $STREAM_DIR/*.conf; }"
 }
 
 run_user() {
@@ -941,10 +996,6 @@ run_start() {
     say "  no nginx binary"
     return 1
   }
-  nginx_do -t || {
-    say "  config test failed"
-    return 1
-  }
   if have_systemd && [ -f /etc/systemd/system/nginx-ptokax.service ]; then
     priv systemctl restart nginx-ptokax &&
       priv systemctl --no-pager --lines=3 status nginx-ptokax
@@ -960,7 +1011,7 @@ page_nginx() {
   _own='NGINX_MODE NGINX_PREFIX BUILD_DIR NGINX_USER'
   snapshot $_own
   while :; do
-    head2 "1  nginx"
+    head2 "1  user & nginx"
     _pn_b=$(nginx_bin)
     row a "mode" "$NGINX_MODE" "auto, system or prefix"
     row b "prefix" "$NGINX_PREFIX" "a source build goes here"
@@ -971,15 +1022,7 @@ page_nginx() {
     row "" "stream" "$(nginx_has_stream && echo yes || echo no)" "required, off by default"
     say ""
 
-    # --- Dynamic Run Action ---
-    _st_nginx=$(step_state "nginx")
-    case $_st_nginx in
-    done) act x "run nginx step (already done)" ;;
-    ready) act x "run nginx step now" ;;
-    *) printf '%s    %-3s %s%s\n' "$DIM" "x" "run nginx step now ($_st_nginx)" "$OFF" ;;
-    esac
-    # --------------------------
-
+    act x "run user and nginx steps now"
     act r "reset this page"
     act s "return, keeping changes"
     act q "return, discarding them"
@@ -990,15 +1033,16 @@ page_nginx() {
     c) edit BUILD_DIR "source dir" "" ;;
     d) edit NGINX_USER "runs as" "User= and Group= on the unit, so nginx is never root" ;;
     x)
-      if [ "$_st_nginx" = "ready" ] || [ "$_st_nginx" = "done" ]; then
-        say ""
+      say ""
+      [ "$(step_state "user")" = ready ] && {
+        say "== Running user step"
+        run_user
+      }
+      [ "$(step_state "nginx")" = ready ] || [ "$(step_state "nginx")" = done ] && {
         say "== Running nginx step"
         run_build
-        pause
-      else
-        say "  Step cannot be run yet: $_st_nginx"
-        sleep 1
-      fi
+      }
+      pause
       ;;
     r) reset_vars $_own ;;
     s) return ;;
@@ -1108,7 +1152,7 @@ page_hub() {
   _own='HUB STATE_DIR TCP_PORT TLS_PORT ENABLE_CONSOLE'
   snapshot $_own
   while :; do
-    head2 "3  Hub settings"
+    head2 "3  console & hub settings"
     if ! command -v pxctl >/dev/null 2>&1; then
       intro "pxctl is not installed, so there are no instances to choose from." \
         "Install the units first: make install, from the PtokaX source."
@@ -1125,15 +1169,7 @@ page_hub() {
     row "" "proxy listener" "$PROXY_ADDR" "loopback, PtokaX reads the header here"
     say ""
 
-    # --- Dynamic Run Action ---
-    _st_hub=$(step_state "hub")
-    case $_st_hub in
-    done) act x "run hub settings step (already done)" ;;
-    ready) act x "run hub settings step now" ;;
-    *) printf '%s    %-3s %s%s\n' "$DIM" "x" "run hub settings step now ($_st_hub)" "$OFF" ;;
-    esac
-    # --------------------------
-
+    act x "run console and hub steps now"
     act n "create a new hub with pxctl"
     act r "reset this page"
     act s "return, keeping changes"
@@ -1148,15 +1184,16 @@ page_hub() {
     c) edit TCP_PORT "plaintext port" "" ;;
     d) edit ENABLE_CONSOLE "Lua console" "a socket for pxconsole and socat, see ADMIN-GUIDE" yes no ;;
     x)
-      if [ "$_st_hub" = "ready" ] || [ "$_st_hub" = "done" ]; then
-        say ""
-        say "== Running hub settings step"
+      say ""
+      [ "$(step_state "console")" = ready ] && {
+        say "== Running console step"
+        run_console
+      }
+      [ "$(step_state "hub")" = ready ] || [ "$(step_state "hub")" = done ] && {
+        say "== Running hub step"
         run_hub
-        pause
-      else
-        say "  Step cannot be run yet: $_st_hub"
-        sleep 1
-      fi
+      }
+      pause
       ;;
     n)
       create_hub
@@ -1169,6 +1206,38 @@ page_hub() {
       return
       ;;
     *) say "  no such choice" ;;
+    esac
+  done
+}
+
+page_finalize() {
+  while :; do
+    head2 "4  proxy & finalize"
+    intro "Runs socket, conf, unit, and start steps sequentially."
+    for st in socket conf unit start; do
+      row "" "$(step_label "$st")" "$(step_state "$st")"
+    done
+    say ""
+    act x "run proxy, conf, unit, and start steps now"
+    act q "back"
+    menu
+    case $_key in
+    x)
+      for st in socket conf unit start; do
+        if [ "$(step_state "$st")" = ready ]; then
+          say ""
+          say "== $(step_label "$st")"
+          if step_run "$st"; then
+            say "  success: $(step_label "$st")"
+          else
+            say "  step failed"
+            break
+          fi
+        fi
+      done
+      pause
+      ;;
+    q) return ;;
     esac
   done
 }
@@ -1265,9 +1334,10 @@ main_menu() {
   while :; do
     head2 "PtokaX NMDCS setup"
     intro "Pages record choices. Nothing changes until you run the plan."
-    row 1 "nginx" "$NGINX_MODE, $NGINX_PREFIX, runs as $NGINX_USER"
+    row 1 "user & nginx" "$NGINX_MODE, $NGINX_PREFIX, runs as $NGINX_USER"
     row 2 "certificate" "$CERT_METHOD, $HUB_ADDR"
-    row 3 "hub settings" "${HUB:-<none>}, NMDCS on $TLS_PORT"
+    row 3 "console & hub" "${HUB:-<none>}, console $ENABLE_CONSOLE"
+    row 4 "proxy & finalize" "socket, conf, unit, start"
     say ""
     act p "plan and run          $(plan_summary)"
     act v "verify a running setup"
@@ -1275,10 +1345,18 @@ main_menu() {
     act q "quit"
     menu
     case $_key in
-    1) page_nginx ;; 2) page_cert ;; 3) page_hub ;;
+    1) page_nginx ;; 2) page_cert ;; 3) page_hub ;; 4) page_finalize ;;
     p) page_plan ;; v) page_verify ;;
     R) confirm "reset every setting?" && set_defaults ;;
-    q | Q) exit 0 ;;
+    q | Q)
+      if confirm "save current settings to setup.conf?"; then
+        for v in $VARS; do
+          eval "printf '%s=%s\n' \"\$v\" \"\$(quote \"\${$v}\")\""
+        done >"$here/setup.conf"
+        say "  settings saved to $here/setup.conf"
+      fi
+      exit 0
+      ;;
     esac
   done
 }
