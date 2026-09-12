@@ -25,16 +25,6 @@ Install
   sudo make install-systemd                  # unit, target, pxctl   [Phase 2]
   sudo systemctl daemon-reload
 
-Until the install-systemd target lands, render and place the unit by hand:
-
-  ./contrib/systemd/unitgen.sh \
-      --systemd-version="$(systemctl --version | awk 'NR==1{print $2}')" \
-      --define=bindir=/usr/bin \
-      --define=sysconfdir=/etc \
-      --define=docdir=/usr/share/doc/ptokax \
-      < contrib/systemd/ptokax@.service.in \
-      | sudo tee /etc/systemd/system/'ptokax@.service' >/dev/null
-  sudo systemctl daemon-reload
 
 pxctl carries the same @bindir@/@sysconfdir@/@datadir@/@docdir@ placeholders and is
 substituted by the same install target. Running it from the source tree before then,
