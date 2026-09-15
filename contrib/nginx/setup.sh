@@ -330,7 +330,7 @@ sync_cert_paths() {
 set_defaults() {
   [ -f "$here/setup.conf" ] && . "$here/setup.conf" 2>/dev/null || true
 
-  NGINX_PREFIX=${NGINX_PREFIX:-/usr/local/nginx}
+  NGINX_PREFIX=${NGINX_PREFIX:-/usr/local}
   NGINX_USER=${NGINX_USER:-nginx}
   NGINX_MODE=${NGINX_MODE:-auto}
   BUILD_DIR=${BUILD_DIR:-/usr/local/src/nginx}
@@ -342,8 +342,8 @@ set_defaults() {
   HUB_ADDR=${HUB_ADDR:-hub.example.com}
   CERT_METHOD=${CERT_METHOD:-letsencrypt}
   CERT_CHALLENGE=${CERT_CHALLENGE:-http}
-  CERT=${CERT:-/etc/letsencrypt/live/hub.example.com/fullchain.pem}
-  KEY=${KEY:-/etc/letsencrypt/live/hub.example.com/privkey.pem}
+  CERT=
+  KEY=
   CERT_CUSTOM=${CERT_CUSTOM:-no}
   STREAM_DIR=${STREAM_DIR:-}
   CONFD_DIR=${CONFD_DIR:-}
@@ -1019,7 +1019,6 @@ page_nginx() {
     row d "runs as" "$NGINX_USER" "$(user_exists "$NGINX_USER" && echo exists || echo 'not created')"
     say ""
     row "" "binary" "${_pn_b:-none found}"
-    row "" "stream" "$(nginx_has_stream && echo yes || echo no)" "required, off by default"
     say ""
 
     act x "run user and nginx steps now"

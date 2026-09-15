@@ -25,7 +25,7 @@ Same code path as ScriptMan.Restart(), so the same effects: script state is
 lost and bots re-announce. No disconnects.
 
 
-Where the files went
+Where the files go 
 --------------------
 
 	/var/lib/ptokax/HubName/	cfg/ scripts/ texts/
