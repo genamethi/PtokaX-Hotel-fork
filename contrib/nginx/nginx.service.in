@@ -32,7 +32,7 @@ RestartSec=5s
 KillMode=mixed
 TimeoutStopSec=30s
 
-SyslogIdentifier=nginx-ptokax
+SyslogIdentifier=nginx
 LimitNOFILE=65536
 
 # --- privilege --------------------------------------------------------------

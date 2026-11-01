@@ -1,0 +1,62 @@
+# sslh built from source with libproxyprotocol.
+#
+# Binds the NMDCS port and nothing else. TLS goes to nginx, a client that sends
+# nothing goes to the hub, and both get a PROXY header with the client address.
+
+[Unit]
+Description=sslh sharing the NMDCS port between TLS and plain clients for PtokaX
+After=network.target nginx.service
+Wants=ptokax.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+
+ExecStart=@SSLHBIN@ --foreground --config @SSLHCFG@
+
+Restart=on-failure
+RestartSec=5s
+# exit code on SIGTERM
+SuccessExitStatus=15
+
+SyslogIdentifier=sslh-ptokax
+LimitNOFILE=65536
+
+# --- privilege --------------------------------------------------------------
+# A port below 1024 needs these two instead:
+#   CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+#   AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+UMask=0077
+
+# --- filesystem -------------------------------------------------------------
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateMounts=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RemoveIPC=yes
+KeyringMode=private
+ProtectHostname=yes            #@since 242
+RestrictSUIDSGID=yes           #@since 242
+ProtectKernelLogs=yes          #@since 244
+ProtectClock=yes               #@since 245
+ProtectProc=invisible          #@since 247
+
+# --- kernel and syscalls ----------------------------------------------------
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

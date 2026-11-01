@@ -6,9 +6,9 @@ set -u
 self=${0##*/}
 here=$(cd "$(dirname "$0")" && pwd)
 
-VARS='NGINX_PREFIX NGINX_USER NGINX_MODE BUILD_DIR TLS_PORT PROXY_ADDR TCP_PORT
-      HUB STATE_DIR HUB_ADDR CERT_METHOD CERT KEY CERT_CUSTOM STREAM_DIR CONFD_DIR
-      ENABLE_CONSOLE CERT_CHALLENGE'
+VARS='NGINX_PREFIX NGINX_USER NGINX_MODE BUILD_DIR SSLH_BUILD_DIR TLS_PORT TLS_ADDR
+      PROXY_ADDR TCP_PORT HUB STATE_DIR HUB_ADDR CERT_METHOD CERT KEY CERT_CUSTOM
+      STREAM_DIR CONFD_DIR ENABLE_CONSOLE CERT_CHALLENGE'
 
 quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
@@ -206,6 +206,37 @@ ensure_tool() {
   }
   return 0
 }
+# -dev package naming differs: libconfig, libconfig-dev, libconfig-devel
+dev_pkg() {
+  if command -v pacman >/dev/null 2>&1; then
+    printf '%s' "$1"
+  elif command -v apt-get >/dev/null 2>&1; then
+    printf 'lib%s-dev' "${1#lib}"
+  elif command -v dnf >/dev/null 2>&1 || command -v zypper >/dev/null 2>&1; then
+    printf '%s-devel' "$1"
+  else
+    printf '%s-dev' "$1"
+  fi
+}
+
+ensure_header() {
+  [ -f "/usr/include/$1" ] && return 0
+  _eh_pkg=$(dev_pkg "$2")
+  if ! _eh_cmd=$(pkg_cmd "$_eh_pkg"); then
+    say "  needs $1, and no package manager this script knows was found"
+    return 1
+  fi
+  confirm "needs $1, install $_eh_pkg?" || return 1
+  priv_sh "$_eh_cmd" || {
+    say "  install failed"
+    return 1
+  }
+  [ -f "/usr/include/$1" ] || {
+    say "  still no /usr/include/$1"
+    return 1
+  }
+}
+
 tool_note() { command -v "$1" >/dev/null 2>&1 || printf 'needs %s' "$1"; }
 
 # The whole fork assumes systemd, so this is a fact about the host rather than
@@ -214,6 +245,8 @@ have_systemd() { command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/syste
 user_exists() { id -u "$1" >/dev/null 2>&1; }
 
 # --- nginx ------------------------------------------------------------------
+STREAM_MODULES='stream stream_ssl_module stream_realip_module'
+
 nginx_bin() {
   case $NGINX_MODE in
   prefix) printf '%s/sbin/nginx' "$NGINX_PREFIX" ;;
@@ -227,8 +260,30 @@ nginx_has_stream() {
   _nhs_b=$(nginx_bin)
   [ -n "$_nhs_b" ] && [ -x "$_nhs_b" ] || return 1
   _nhs_v=$("$_nhs_b" -V 2>&1) || return 1
-  printf '%s' "$_nhs_v" | grep -q -- '--with-stream' &&
-    printf '%s' "$_nhs_v" | grep -q -- '--with-stream_ssl_module'
+  for _nhs_m in $STREAM_MODULES; do
+    printf '%s' "$_nhs_v" | tr ' ' '\n' | grep -qx -- "--with-$_nhs_m" || return 1
+  done
+}
+
+# --- sslh -------------------------------------------------------------------
+SSLH_REF=v2.3.1
+PP_REF=v1.3.3
+SSLH_LOCAL=/usr/local/bin/sslh-select
+SSLH_CFG=/etc/sslh-ptokax.cfg
+
+sslh_bin() {
+  if [ -x "$SSLH_LOCAL" ]; then
+    printf '%s' "$SSLH_LOCAL"
+  else command -v sslh-select 2>/dev/null || true; fi
+}
+sslh_has_pp() {
+  _shp_b=$(sslh_bin)
+  [ -n "$_shp_b" ] && "$_shp_b" -V 2>/dev/null | grep -qx HAVE_PROXYPROTOCOL
+}
+addr_host() {
+  _ah=${1%:*}
+  _ah=${_ah#[}
+  printf '%s' "${_ah%]}"
 }
 # -V reports --conf-path only when it was given at build time.
 nginx_conf_prefix() {
@@ -334,7 +389,9 @@ set_defaults() {
   NGINX_USER=${NGINX_USER:-nginx}
   NGINX_MODE=${NGINX_MODE:-auto}
   BUILD_DIR=${BUILD_DIR:-/usr/local/src/nginx}
+  SSLH_BUILD_DIR=${SSLH_BUILD_DIR:-/usr/local/src/sslh}
   TLS_PORT=${TLS_PORT:-5411}
+  TLS_ADDR=${TLS_ADDR:-127.0.0.1:5413}
   PROXY_ADDR=${PROXY_ADDR:-127.0.0.1:5412}
   TCP_PORT=${TCP_PORT:-411}
   HUB=${HUB:-}
@@ -357,19 +414,20 @@ set_defaults() {
 
 set_defaults
 
-STEPS='user nginx cert console hub socket conf unit start'
+STEPS='user nginx sslh cert console hub socket conf unit start'
 
 step_label() {
   case $1 in
   nginx) echo "build nginx with stream" ;;
+  sslh) echo "build sslh with proxyprotocol" ;;
   cert) echo "obtain the certificate" ;;
   hub) echo "apply the hub settings" ;;
-  conf) echo "write the nginx config" ;;
+  conf) echo "write the nginx and sslh config" ;;
   user) echo "create the nginx account" ;;
-  unit) echo "install the nginx unit" ;;
+  unit) echo "install the nginx and sslh units" ;;
   console) echo "enable the Lua console socket" ;;
   socket) echo "install the proxy socket" ;;
-  start) echo "start nginx" ;;
+  start) echo "start nginx and sslh" ;;
   esac
 }
 
@@ -382,6 +440,13 @@ step_state() {
     }
     [ -n "$(nginx_bin)" ] && [ "$NGINX_MODE" = system ] && {
       echo "packaged nginx has no stream module, set mode to prefix on page 1"
+      return
+    }
+    echo ready
+    ;;
+  sslh)
+    sslh_has_pp && {
+      echo done
       return
     }
     echo ready
@@ -466,11 +531,12 @@ step_state() {
       echo "cannot work out the nginx config directory"
       return
     }
-    [ -f "$STREAM_DIR/ptokax-nmdcs.conf" ] && {
-      grep -q "ssl_certificate $CERT;" "$STREAM_DIR/ptokax-nmdcs.conf" 2>/dev/null && {
-        echo done
-        return
-      }
+    [ -n "$CONFD_DIR" ] || CONFD_DIR=${STREAM_DIR%/*}/conf.d
+    stream_conf | cmp -s - "$STREAM_DIR/ptokax-nmdcs.conf" 2>/dev/null &&
+      sslh_conf | cmp -s - "$SSLH_CFG" 2>/dev/null &&
+      hubinfo_conf | cmp -s - "$CONFD_DIR/ptokax-hubinfo.conf" 2>/dev/null && {
+      echo done
+      return
     }
     echo ready
     ;;
@@ -490,8 +556,13 @@ step_state() {
       echo "this host is not running systemd"
       return
     }
-    [ -f /etc/systemd/system/nginx-ptokax.service ] && {
+    nginx_unit 2>/dev/null | cmp -s - "$NGINX_UNIT" 2>/dev/null &&
+      sslh_unit 2>/dev/null | cmp -s - "$SSLH_UNIT" 2>/dev/null && {
       echo done
+      return
+    }
+    sslh_has_pp || {
+      echo "after: build sslh with proxyprotocol"
       return
     }
     user_exists "$NGINX_USER" || {
@@ -526,8 +597,8 @@ step_state() {
     ;;
   start)
     [ -n "$STREAM_DIR" ] || STREAM_DIR=$(nginx_conf_prefix 2>/dev/null)/stream.d
-    [ -n "$STREAM_DIR" ] && [ -f "$STREAM_DIR/ptokax-nmdcs.conf" ] || {
-      echo "after: write the nginx config"
+    [ -n "$STREAM_DIR" ] && [ -f "$STREAM_DIR/ptokax-nmdcs.conf" ] && [ -f "$SSLH_CFG" ] || {
+      echo "after: write the nginx and sslh config"
       return
     }
     echo ready
@@ -538,6 +609,7 @@ step_state() {
 step_run() {
   case $1 in
   nginx) run_build ;; cert) run_cert ;;
+  sslh) run_sslh ;;
   hub) run_hub ;; conf) run_conf ;;
   console) run_console ;;
   user) run_user ;; unit) run_unit ;;
@@ -595,7 +667,7 @@ run_plan() {
 run_build() {
   ensure_tool git || return 1
   say "  clone     $BUILD_DIR"
-  say "  configure --prefix=$NGINX_PREFIX --with-stream --with-stream_ssl_module"
+  say "  configure --prefix=$NGINX_PREFIX$(printf ' --with-%s' $STREAM_MODULES)"
   say "  install   $NGINX_PREFIX"
   install_needs_root && say "  root needed" || say "  no root needed"
   confirm "go ahead?" || return 1
@@ -615,7 +687,7 @@ run_build() {
   }
 
   _cfg="cd '$BUILD_DIR' && auto/configure --prefix='$NGINX_PREFIX' \
---with-stream --with-stream_ssl_module --with-http_ssl_module \
+$(printf ' --with-%s' $STREAM_MODULES) --with-http_ssl_module \
 --user='$NGINX_USER' --group='$NGINX_USER' \
 --pid-path=/run/nginx/nginx.pid \
 --error-log-path=/var/log/nginx/error.log \
@@ -673,6 +745,59 @@ run_build() {
 
   NGINX_MODE=prefix
   say "  installed $(nginx_bin)"
+}
+
+in_src() {
+  if can_write "$1"; then sh -c "cd '$1' && $2"; else priv_sh "cd '$1' && $2"; fi
+}
+
+fetch_src() {
+  _fs_par=$(dirname "$2")
+  can_write "$_fs_par" && mkdir -p "$_fs_par" || priv mkdir -p "$_fs_par"
+  if [ -d "$2/.git" ]; then
+    in_src "$2" "git fetch -q --depth 1 origin tag '$3' && git -c advice.detachedHead=false checkout -q '$3'"
+  elif can_write "$_fs_par"; then
+    git -c advice.detachedHead=false clone -q --depth 1 --branch "$3" "$1" "$2"
+  else
+    priv git -c advice.detachedHead=false clone -q --depth 1 --branch "$3" "$1" "$2"
+  fi
+}
+
+run_sslh() {
+  _pp=$(dirname "$SSLH_BUILD_DIR")/libproxyprotocol
+  ensure_tool git || return 1
+  ensure_header libconfig.h libconfig || return 1
+  ensure_header pcre2.h pcre2 || return 1
+  say "  clone     $SSLH_BUILD_DIR $SSLH_REF"
+  say "  clone     $_pp $PP_REF"
+  say "  install   $SSLH_LOCAL"
+  confirm "go ahead?" || return 1
+
+  fetch_src https://github.com/kosmas-valianos/libproxyprotocol.git "$_pp" "$PP_REF" &&
+    fetch_src https://github.com/yrutschle/sslh.git "$SSLH_BUILD_DIR" "$SSLH_REF" || {
+    say "  clone failed"
+    return 1
+  }
+
+  # upstream only builds the .so, and a static archive needs no LD_LIBRARY_PATH
+  in_src "$_pp" "make src/proxy_protocol.o && mkdir -p libs && \
+ar rcs libs/libproxyprotocol.a src/proxy_protocol.o" || {
+    say "  libproxyprotocol build failed"
+    return 1
+  }
+
+  _env="C_INCLUDE_PATH='$_pp/src' LIBRARY_PATH='$_pp/libs'"
+  in_src "$SSLH_BUILD_DIR" "$_env ./configure && $_env make sslh-select" || {
+    say "  sslh build failed"
+    return 1
+  }
+
+  priv install -m 755 "$SSLH_BUILD_DIR/sslh-select" "$SSLH_LOCAL" || return 1
+  sslh_has_pp || {
+    say "  $SSLH_LOCAL has no proxyprotocol support"
+    return 1
+  }
+  say "  installed $SSLH_LOCAL"
 }
 
 run_cert() {
@@ -920,6 +1045,24 @@ run_hub_console() {
   return 1
 }
 
+stream_conf() {
+  sed -e "s|@TLSPORT@|$TLS_PORT|g" -e "s|@TCPPORT@|$TCP_PORT|g" \
+    -e "s|@CERT@|$CERT|g" -e "s|@KEY@|$KEY|g" -e "s|@TLSADDR@|$TLS_ADDR|g" \
+    -e "s|@PROXYADDR@|$PROXY_ADDR|g" -e "s|@HUBADDR@|$HUB_ADDR|g" \
+    "$here/stream.conf"
+}
+
+sslh_conf() {
+  sed -e "s|@TLSPORT@|$TLS_PORT|g" \
+    -e "s|@TLSHOST@|$(addr_host "$TLS_ADDR")|g" -e "s|@TLSADDRPORT@|${TLS_ADDR##*:}|g" \
+    -e "s|@PROXYHOST@|$(addr_host "$PROXY_ADDR")|g" -e "s|@PROXYPORT@|${PROXY_ADDR##*:}|g" \
+    "$here/sslh.cfg"
+}
+
+hubinfo_conf() {
+  sed -e "s|@STATEDIR@|$(hub_state_dir 2>/dev/null || true)|g" "$here/hubinfo.conf"
+}
+
 run_conf() {
   [ -n "$STREAM_DIR" ] && [ -n "$CONFD_DIR" ] || {
     _cp=$(nginx_conf_prefix)
@@ -939,16 +1082,16 @@ run_conf() {
   priv_mkdir "$STREAM_DIR"
 
   # Write the hub-specific NMDCS stream rule
-  sed -e "s|@TLSPORT@|$TLS_PORT|g" -e "s|@TCPPORT@|$TCP_PORT|g" \
-    -e "s|@CERT@|$CERT|g" -e "s|@KEY@|$KEY|g" \
-    -e "s|@PROXYADDR@|$PROXY_ADDR|g" -e "s|@HUBADDR@|$HUB_ADDR|g" \
-    "$here/stream.conf" | priv_write "$STREAM_DIR/ptokax-nmdcs.conf"
+  stream_conf | priv_write "$STREAM_DIR/ptokax-nmdcs.conf"
   say "  wrote $STREAM_DIR/ptokax-nmdcs.conf"
+
+  sslh_conf | priv_write "$SSLH_CFG"
+  say "  wrote $SSLH_CFG"
 
   # Write the hub-specific pinger http rule if state dir exists
   if [ -n "$CONFD_DIR" ] && [ -n "$_d" ]; then
     priv_mkdir "$CONFD_DIR"
-    sed -e "s|@STATEDIR@|$_d|g" "$here/hubinfo.conf" | priv_write "$CONFD_DIR/ptokax-hubinfo.conf"
+    hubinfo_conf | priv_write "$CONFD_DIR/ptokax-hubinfo.conf"
     say "  wrote $CONFD_DIR/ptokax-hubinfo.conf"
   fi
 }
@@ -958,20 +1101,37 @@ run_user() {
   priv useradd --system --no-create-home --shell /usr/sbin/nologin "$NGINX_USER"
 }
 
+NGINX_UNIT=/etc/systemd/system/nginx.service
+SSLH_UNIT=/etc/systemd/system/sslh-ptokax.service
+
+unit_gen() {
+  _ug_v=$(systemctl --version 2>/dev/null | sed -n '1s/^systemd \([0-9]*\).*/\1/p')
+  "$here/../systemd/unitgen.sh" --systemd-version="${_ug_v:-0}" "$@"
+}
+nginx_unit() {
+  unit_gen --define="NGINXBIN=$(nginx_bin)" --define="NGINXUSER=$NGINX_USER" \
+    --define="STATEDIR=$(hub_state_dir)" --define="docdir=/usr/share/doc/ptokax" \
+    <"$here/nginx.service.in"
+}
+sslh_unit() {
+  unit_gen --define="SSLHBIN=$(sslh_bin)" --define="SSLHCFG=$SSLH_CFG" <"$here/sslh.service.in"
+}
+
 run_unit() {
-  _gen=$here/../systemd/unitgen.sh
-  [ -x "$_gen" ] || {
-    say "  unitgen.sh not found at $_gen"
+  [ -x "$here/../systemd/unitgen.sh" ] || {
+    say "  unitgen.sh not found at $here/../systemd/unitgen.sh"
     return 1
   }
-  _d=$(hub_state_dir)
-  _v=$(systemctl --version 2>/dev/null | sed -n '1s/^systemd \([0-9]*\).*/\1/p')
-  [ -n "$_v" ] || _v=0
-  "$_gen" --systemd-version="$_v" \
-    --define="NGINXBIN=$(nginx_bin)" --define="NGINXUSER=$NGINX_USER" \
-    --define="STATEDIR=$_d" --define="docdir=/usr/share/doc/ptokax" \
-    <"$here/nginx.service.in" | priv_write /etc/systemd/system/nginx-ptokax.service || return 1
-  say "  wrote nginx-ptokax.service for systemd $_v"
+  # the unit's name before it was nginx.service
+  if [ -f /etc/systemd/system/nginx-ptokax.service ]; then
+    priv systemctl disable --now nginx-ptokax
+    priv rm /etc/systemd/system/nginx-ptokax.service
+    say "  removed nginx-ptokax.service"
+  fi
+  nginx_unit | priv_write "$NGINX_UNIT" || return 1
+  say "  wrote $NGINX_UNIT"
+  sslh_unit | priv_write "$SSLH_UNIT" || return 1
+  say "  wrote $SSLH_UNIT"
   priv systemctl daemon-reload
 }
 
@@ -996,9 +1156,10 @@ run_start() {
     say "  no nginx binary"
     return 1
   }
-  if have_systemd && [ -f /etc/systemd/system/nginx-ptokax.service ]; then
-    priv systemctl restart nginx-ptokax &&
-      priv systemctl --no-pager --lines=3 status nginx-ptokax
+  if have_systemd && [ -f "$NGINX_UNIT" ]; then
+    priv systemctl enable nginx sslh-ptokax &&
+      priv systemctl restart nginx sslh-ptokax &&
+      priv systemctl --no-pager --lines=3 status nginx sslh-ptokax
   elif nginx_do -s reload; then
     say "  reloaded"
   else nginx_do && say "  started"; fi
@@ -1008,7 +1169,7 @@ run_start() {
 # pages
 # ============================================================================
 page_nginx() {
-  _own='NGINX_MODE NGINX_PREFIX BUILD_DIR NGINX_USER'
+  _own='NGINX_MODE NGINX_PREFIX BUILD_DIR NGINX_USER SSLH_BUILD_DIR'
   snapshot $_own
   while :; do
     head2 "1  user & nginx"
@@ -1021,8 +1182,13 @@ page_nginx() {
     row "" "binary" "${_pn_b:-none found}"
     row "" "stream" "$(nginx_has_stream && echo yes || echo no)" "required, off by default"
     say ""
+    _pn_s=$(sslh_bin)
+    row e "sslh source" "$SSLH_BUILD_DIR" "git clone kept here"
+    row "" "sslh" "${_pn_s:-none found}"
+    row "" "proxyprotocol" "$(sslh_has_pp && echo yes || echo no)" "required, not in distro packages"
+    say ""
 
-    act x "run user and nginx steps now"
+    act x "run user, nginx and sslh steps now"
     act r "reset this page"
     act s "return, keeping changes"
     act q "return, discarding them"
@@ -1032,6 +1198,7 @@ page_nginx() {
     b) edit NGINX_PREFIX "prefix" "" ;;
     c) edit BUILD_DIR "source dir" "" ;;
     d) edit NGINX_USER "runs as" "User= and Group= on the unit, so nginx is never root" ;;
+    e) edit SSLH_BUILD_DIR "sslh source" "libproxyprotocol is cloned beside it" ;;
     x)
       say ""
       [ "$(step_state "user")" = ready ] && {
@@ -1041,6 +1208,10 @@ page_nginx() {
       [ "$(step_state "nginx")" = ready ] || [ "$(step_state "nginx")" = done ] && {
         say "== Running nginx step"
         run_build
+      }
+      [ "$(step_state "sslh")" = ready ] && {
+        say "== Running sslh step"
+        run_sslh
       }
       pause
       ;;
@@ -1167,6 +1338,7 @@ page_hub() {
     _sd=$(hub_state_dir 2>/dev/null || true)
     row "" "state dir" "${_sd:-<none>}"
     row "" "proxy listener" "$PROXY_ADDR" "loopback, PtokaX reads the header here"
+    row "" "TLS listener" "$TLS_ADDR" "loopback, nginx terminates TLS here"
     say ""
 
     act x "run console and hub steps now"
@@ -1295,13 +1467,17 @@ page_verify() {
   head2 "verify"
   say "  listening"
   command -v ss >/dev/null 2>&1 &&
-    { ss -ltn 2>/dev/null | grep -E ":($TLS_PORT|$TCP_PORT|${PROXY_ADDR##*:})\b" ||
-      say "    nothing on $TLS_PORT, $TCP_PORT or ${PROXY_ADDR##*:}"; }
+    { ss -ltn 2>/dev/null | grep -E ":($TLS_PORT|$TCP_PORT|${PROXY_ADDR##*:}|${TLS_ADDR##*:})\b" ||
+      say "    nothing on $TLS_PORT, $TCP_PORT, ${PROXY_ADDR##*:} or ${TLS_ADDR##*:}"; }
   say ""
   say "  TLS and ALPN on $HUB_ADDR:$TLS_PORT"
   command -v openssl >/dev/null 2>&1 &&
     { printf '' | openssl s_client -alpn nmdc -connect "$HUB_ADDR:$TLS_PORT" 2>/dev/null |
       grep -E "ALPN protocol|subject=|Verify return code" || say "    no answer"; }
+  say ""
+  say "  plaintext on $HUB_ADDR:$TLS_PORT"
+  command -v socat >/dev/null 2>&1 &&
+    { socat -u -T5 "TCP:$HUB_ADDR:$TLS_PORT" - 2>/dev/null | grep -ao '^\$Lock' || say "    no \$Lock"; }
   say ""
   say "  pinger endpoint"
   command -v curl >/dev/null 2>&1 &&

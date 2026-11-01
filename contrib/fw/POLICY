@@ -8,7 +8,7 @@ Ports
 -----
 
 	411	TCPPorts, bound by PtokaX
-	5411	the NMDCS port, bound by the TLS terminator
+	5411	the NMDCS port, bound by sslh
 
 The loopback address in TLSProxyAddress needs no rule. Nothing off the host can reach
 it.
