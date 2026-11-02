@@ -27,8 +27,8 @@ Install
 
 
 pxctl carries the same @bindir@/@sysconfdir@/@datadir@/@docdir@ placeholders and is
-substituted by the same install target. Running it from the source tree before then,
-override the paths in the environment:
+substituted by the same install target. When running it from the source tree before
+then, override the paths in the environment:
 
   PTOKAX_BIN=/usr/bin/PtokaX ./contrib/systemd/pxctl list
 
@@ -121,7 +121,7 @@ Two ways to give an instance its own address:
 
   - Socket activation, below. ListenStream= names the bind address directly and leaves
     HubAddress free, which is the general answer.
-
+TODO: Verify that "drop-in" isn't some LLM coinage bs.
 Socket activation
 -----------------
 
